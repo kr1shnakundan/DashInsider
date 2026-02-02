@@ -34,9 +34,8 @@ const userSchema = new mongoose.Schema({
         enum:["Admin","Analyst","Support"],
         default:"Analyst"
     },
-    additionalDetails:{
+    additionalDetails:{                     //--->Keeping it for future use
         type:mongoose.Schema.Types.ObjectId,
-        required:true,
         ref:"Profile"
     },
     resetPasswordExpires:{

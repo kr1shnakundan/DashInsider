@@ -1,7 +1,7 @@
 const express = require("express");
 const app = express();
 
-const userRoute = require("./routes/UserRoute");
+
 
 
 const dotenv = require("dotenv");
@@ -11,9 +11,9 @@ dotenv.config();
 const database = require("./config/database")
 
 const cors = require("cors");
+const cookieParser = require("cookie-parser")
 
 const PORT = process.env.PORT || 4000;
-app.use(express.json());
 
 app.use(
     cors({
@@ -22,7 +22,16 @@ app.use(
     })
 )
 
+app.use(express.json());
+app.use(cookieParser())
+
+const userRoute = require("./routes/UserRoute");
+const metriceRoute = require("./routes/MetriceRoute")
+const subscriptions = require("./routes/SubscriptionRoute")
+
 app.use("/api/v1/auth",userRoute);
+app.use("/api/v1/metrics",metriceRoute)
+app.use("/api/v1/subscriptions",subscriptions)
 
 app.get("/",(req,res)=>{
     return res.json({
