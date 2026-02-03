@@ -41,7 +41,7 @@ const seed = async()=>{
                         profession:null
                     });
 
-            const user = await User.create({
+            users.push({
                 firstName:`User${i}`,
                 lastName:"Demo",
                 email:`user${i}@test.com`,
@@ -53,14 +53,14 @@ const seed = async()=>{
                 image:`https://api.dicebear.com/5.x/initials/svg?seed=User${i}Demo`
             })
 
-            users.push(user);
-
             // Progress indicator
             if ((i + 1) % 50 === 0) {
                 console.log(`  ✓ Created ${i + 1} users...`);
 
             }
         }
+
+        const createdUsers = await User.insertMany(users);
 
         console.log(`✓ Created ${users.length} users`);
 
@@ -74,8 +74,9 @@ const seed = async()=>{
             const statusChance = Math.random()
 
             let status = "Active";
-            if(statusChance > 0.8) status = "Canceled";
-            if(statusChance > 0.9) status = "Past_due";
+            if (statusChance < 0.70) status = "Active";
+            else if (statusChance < 0.90) status = "Canceled";
+            else status = "Past_due";
 
             await Subscription.create({
                 userId:user._id,

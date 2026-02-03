@@ -1,5 +1,8 @@
+const dayjs = require("dayjs")
 const Subscription = require("../models/Subscription")
 const User = require("../models/User")
+const mongoose = require("mongoose")
+
 
 exports.getSubscriptions = async(req,res)=>{
     try{
@@ -57,6 +60,138 @@ exports.getSubscriptions = async(req,res)=>{
         return res.status(500).json({
             success:false,
             message:`unable to get Subscription`
+        })
+    }
+}
+
+
+exports.upgradeSubscriptions = async(req,res)=>{
+    const session = await mongoose.startSession()
+    session.startTransaction()
+    try{
+        const {plan} = req.body;
+        const userId = req.user.id;
+
+        const pricing = {
+            Free: 0,
+            Pro: 499,
+            Premium:999
+        }
+
+        // console.log("Requested plan:", plan)
+        // console.log("Pricing details:", pricing[plan])
+
+        if(!pricing[plan]){
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(400).json({
+                success:false,
+                message:`Invalid Plan`
+            })
+        }
+
+        const existing = await Subscription.findOne({userId}).session(session)
+
+        
+        if(existing && existing.status === 'Past_due'){
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(400).json({
+                success:false,
+                message:`Please clear the Past due first`
+            })
+        }
+
+        if(existing && existing.subscriptionType === plan && existing.status === 'Active'){
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(400).json({
+                success:false,
+                message:`Already active plan`
+            })
+        }
+
+
+        //  Allow reactivation of canceled subscription
+        if (existing.status === "Canceled") {
+        // Reactivate the subscription
+        existing.subscriptionType = plan;
+        existing.monthlyPrice = pricing[plan];
+        existing.status = "Active";
+        existing.startedDate = new Date();
+        existing.renewalDate = dayjs().add(30, "day").toDate();
+        existing.cancellationDate = null;  // Clear cancellation date
+        existing.pendingDowngrade = undefined;  // Clear any pending changes
+        
+        await existing.save({ session });
+
+        await session.commitTransaction();
+        session.endSession();
+
+        return res.json({
+            success: true,
+            message: `Successfully reactivated ${plan} plan`,
+            subscription: existing,
+            reactivated: true
+        });
+        }
+
+        // Determine if upgrade or downgrade
+        const planHierarchy = { Free: 0, Pro: 1, Premium: 2 };
+        const isUpgrade = !existing || planHierarchy[plan] > planHierarchy[existing.subscriptionType];
+        const isDowngrade = existing && planHierarchy[plan] < planHierarchy[existing.subscriptionType];
+
+        if(isUpgrade){
+            existing.subscriptionType = plan;
+            existing.monthlyPrice = pricing[plan]
+            existing.status = "Active"
+            existing.startedDate = new Date()
+            existing.renewalDate = dayjs().add(30,"day").toDate()
+            existing.cancellationDate = null
+            existing.pendingDowngrade = undefined
+
+
+            await existing.save({session})
+
+            await session.commitTransaction()
+            session.endSession()
+
+            return res.status(200).json({
+                success:true,
+                subscription:existing,
+                message:`Subscription upgraded successfully to ${plan}`
+            })  
+        } else if(isDowngrade){
+            // Schedule downgrade at next renewal
+            existing.pendingDowngrade = {
+                planType: plan,
+                monthlyPrice: pricing[plan],
+                effectiveDate: existing.renewalDate
+            };
+
+            await existing.save({ session });
+
+            console.log("Scheduled downgrade:", existing.pendingDowngrade)
+
+            await session.commitTransaction();
+            session.endSession();
+
+            return res.status(200).json({
+                success: true,
+                subscription: existing,
+                effectiveDate: existing.renewalDate,
+                message: `You will continue to have ${existing.subscriptionType} access until ${dayjs(existing.renewalDate).format('MMM D, YYYY')}`
+            });
+        }
+
+        
+
+
+    } catch(error){
+        console.log("Error in upgrading Subscription...",error)
+        return res.status(500).json({
+            success:false,
+            message:`Unable to upgrade subscription`
         })
     }
 }

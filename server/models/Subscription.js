@@ -34,6 +34,14 @@ const subscriptionSchema = new mongoose.Schema({
         required:true,
         enum:["Active","Canceled","Past_due"],
         default:"Active"
+    },
+    pendingDowngrade: {
+        planType: {
+            type: String,
+            enum: ["Free", "Pro", "Premium"]
+        },
+        monthlyPrice: {type: Number},
+        effectiveDate: {type: Date}
     }
 })
 
