@@ -42,7 +42,14 @@ const subscriptionSchema = new mongoose.Schema({
         },
         monthlyPrice: {type: Number},
         effectiveDate: {type: Date}
-    }
-})
+    },
+     // Payment history
+    paymentHistory: [{
+        date: Date,
+        amount: Number,
+        paymentStatus: { type: String, enum: ["success", "failed", "pending"] },
+        failureReason: String
+    }],
+},{timestamps:true})
 
 module.exports = mongoose.model("Subscription",subscriptionSchema)

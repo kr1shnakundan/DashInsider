@@ -29,11 +29,13 @@ const userRoute = require("./routes/UserRoute");
 const metriceRoute = require("./routes/MetriceRoute")
 const subscriptions = require("./routes/SubscriptionRoute")
 const trendRoute = require("./routes/TrendRoute")
+const cohortRoute = require("./routes/CohortRoute")
 
 app.use("/api/v1/auth",userRoute);
 app.use("/api/v1/metrics",metriceRoute)
 app.use("/api/v1/subscriptions",subscriptions)
 app.use("/api/v1/trends",trendRoute)
+app.use("/api/v1/cohort",cohortRoute)
 
 app.get("/",(req,res)=>{
     return res.json({

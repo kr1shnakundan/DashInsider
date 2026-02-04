@@ -99,6 +99,7 @@ exports.upgradeSubscriptions = async(req,res)=>{
             return res.status(400).json({
                 success:false,
                 message:`Please clear the Past due first`
+                // outstandingAmount:existing.monthlyPrice
             })
         }
 
@@ -122,6 +123,15 @@ exports.upgradeSubscriptions = async(req,res)=>{
         existing.renewalDate = dayjs().add(30, "day").toDate();
         existing.cancellationDate = null;  // Clear cancellation date
         existing.pendingDowngrade = undefined;  // Clear any pending changes
+
+        if(pricing[plan] >0){
+            existing.paymentHistory.push( {
+                date: new Date(),
+                amount: pricing[plan],
+                paymentStatus:"success",
+                failureReason : undefined
+            })
+        }
         
         await existing.save({ session });
 
@@ -150,6 +160,15 @@ exports.upgradeSubscriptions = async(req,res)=>{
             existing.cancellationDate = null
             existing.pendingDowngrade = undefined
 
+            if(pricing[plan]>0){
+                existing.paymentHistory.push({
+                    date: new Date(),
+                    amount:pricing[plan],
+                    paymentStatus:"success",
+                    failureReason:undefined
+                })
+            }
+
 
             await existing.save({session})
 
@@ -171,8 +190,6 @@ exports.upgradeSubscriptions = async(req,res)=>{
 
             await existing.save({ session });
 
-            console.log("Scheduled downgrade:", existing.pendingDowngrade)
-
             await session.commitTransaction();
             session.endSession();
 
@@ -183,9 +200,6 @@ exports.upgradeSubscriptions = async(req,res)=>{
                 message: `You will continue to have ${existing.subscriptionType} access until ${dayjs(existing.renewalDate).format('MMM D, YYYY')}`
             });
         }
-
-        
-
 
     } catch(error){
         console.log("Error in upgrading Subscription...",error)
