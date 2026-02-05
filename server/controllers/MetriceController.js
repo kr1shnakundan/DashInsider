@@ -20,7 +20,7 @@ exports.getMetrics = async(req,res)=>{
             lastActiveAt:{$gte:dayjs().subtract(30,"day").toDate()}
         })
 
-
+        //remove->User C: Active, Paid, all payments failed ✗
         const activeSubs = await Subscription.find({
             status:"Active",
 
@@ -35,7 +35,7 @@ exports.getMetrics = async(req,res)=>{
             ]
         })
 
-        const paidSubscribers = activeSubs.length
+        // const paidSubscribers = activeSubs.length
 
 
         const mrr = activeSubs.reduce(
@@ -44,13 +44,21 @@ exports.getMetrics = async(req,res)=>{
 
 
         const totalUsers = await User.countDocuments()
-        const paidUsers = await Subscription.countDocuments({
+        const paidSubscribers = await Subscription.countDocuments({
             status:{$in:["Active","Past_due"]}, 
             monthlyPrice: { $gt: 0 } ,
             paymentHistory:{
                 $elemMatch:{paymentStatus:"success"}
             }
         })
+
+        //includes->User C: Active, Paid, all payments failed 
+        const totalActiveUsers = await Subscription.countDocuments({
+            status: "Active"
+        });
+        const totalChurnedUsers = await Subscription.countDocuments({
+            status: "Canceled"
+        });
 
         const usersAtStart = await User.countDocuments({
             createdAt: { $lt: start }
@@ -96,7 +104,7 @@ exports.getMetrics = async(req,res)=>{
         })
 
         const recoveryRate = pastDueInPeriod === 0 ? 0 : (recoveredSubs / pastDueInPeriod) * 100;
-        const conversionRate = totalUsers === 0 ? 0 : (paidUsers / totalUsers) *100
+        const conversionRate = totalUsers === 0 ? 0 : (paidSubscribers / totalUsers) *100
         const churnRate = usersAtStart === 0 ? 0 : (cancelledInPeriod / usersAtStart) * 100
         const retentionRate = totalUsers === 0 ? 0 : (stillActiveUsers/newSignups) * 100
 
@@ -108,6 +116,9 @@ exports.getMetrics = async(req,res)=>{
                 mau,
                 newSignups,
                 paidSubscribers,
+                totalActiveUsers,
+                totalChurnedUsers,
+                totalUsers,
                 mrr,
                 conversionRate:conversionRate.toFixed(2),
                 churnRate:churnRate.toFixed(2),
