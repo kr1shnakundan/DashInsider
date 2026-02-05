@@ -186,3 +186,44 @@ exports.getLTV = async(req,res)=>{
     }
 }
 
+exports.planChurnAnalytics = async(req,res)=>{
+    try{
+        const planData = await Subscription.aggregate([
+            {
+                $group:{
+                    _id:"$subscriptionType",
+                    totalUsers:{$sum:1},
+                    churnedUsers:{
+                        $sum:{
+                            $cond:[{$eq:["status","Canceled"]},1,0]
+                        }
+                    }
+                }
+            },{
+                $project:{
+                    _id:0,
+                    plan:"$_id",
+                    totalUsers:1,
+                    churnedUsers:1,
+                    churnRate:{
+                        $multiply:[
+                            {$divide:["$churnedUsers","$totalUsers"]} , 100
+                        ]
+                    }
+                }
+            }
+        ])
+
+        return res.status(200).json({
+            success:true,
+            data:planData,
+            message:`Plan churn analytics fetched successfully`     
+        })
+    } catch(error){
+        console.log("Plan churn analytics error...",error)
+        return res.status(500).json({
+            success:false,
+            message:`Unable to fetch plan churn analytics`
+        })  
+    }
+}
