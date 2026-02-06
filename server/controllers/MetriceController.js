@@ -186,6 +186,8 @@ exports.getLTV = async(req,res)=>{
     }
 }
 
+
+//fetches the churn for each plan
 exports.planChurnAnalytics = async(req,res)=>{
     try{
         const planData = await Subscription.aggregate([

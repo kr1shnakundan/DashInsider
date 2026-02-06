@@ -52,7 +52,7 @@ exports.auth = async(req,res,next)=>{
 
 exports.requiredRoles=(...roles)=>{
     return (req,res,next)=>{
-        if(!roles.includes(req.user.role)){
+        if(!roles.includes(req.user.accountType)){
             return res.status(403).json({
                 success:false,
                 message:`Forbidden`

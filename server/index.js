@@ -27,19 +27,21 @@ app.use(cookieParser())
 
 const userRoute = require("./routes/UserRoute");
 const metriceRoute = require("./routes/MetriceRoute")
-const subscriptions = require("./routes/SubscriptionRoute")
+const subscriptionsRoute = require("./routes/SubscriptionRoute")
 const trendRoute = require("./routes/TrendRoute")
 const cohortRoute = require("./routes/CohortRoute")
-const segmentation = require("./routes/SegmentationRoute")
-const forecasting = require("./routes/forecastingRoute")
+const segmentationRoute = require("./routes/SegmentationRoute")
+const forecastingRoute = require("./routes/forecastingRoute")
+const paymentRoute = require("./routes/PaymentRoute")
 
 app.use("/api/v1/auth",userRoute);
 app.use("/api/v1/metrics",metriceRoute)
-app.use("/api/v1/subscriptions",subscriptions)
+app.use("/api/v1/subscriptions",subscriptionsRoute)
 app.use("/api/v1/trends",trendRoute)
 app.use("/api/v1/cohort",cohortRoute)
-app.use("/api/v1/segmentation",segmentation)
-app.use("/api/v1/forecasting",forecasting)
+app.use("/api/v1/segmentation",segmentationRoute)
+app.use("/api/v1/forecasting",forecastingRoute)
+app.use("/api/v1/payment",paymentRoute)
 
 app.get("/",(req,res)=>{
     return res.json({
