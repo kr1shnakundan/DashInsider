@@ -4,6 +4,7 @@ const paymentMethodSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     razorpayCardId: { type: String, required: true, unique: true },
     razorpayTokenId: { type: String },
+    razorpayCustomerId: { type: String },
     methodType: { type: String, default: "card" },
     cardDetails: {
         last4: String,

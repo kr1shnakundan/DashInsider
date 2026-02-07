@@ -8,6 +8,9 @@ const dotenv = require("dotenv");
 dotenv.config();
 //  OR require("dontenv").config();
 
+require("./jobs/applyDowngrade")
+require("./jobs/handlePastDue")
+
 const database = require("./config/database")
 
 const cors = require("cors");
