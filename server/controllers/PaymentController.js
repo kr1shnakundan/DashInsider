@@ -86,7 +86,26 @@ const ensureRazorpaySubscription = async (subscription, customerId) => {
     subscription.razorpayCustomerId = effectiveCustomerId
 }
 
-const addPaymentHistoryEntry = (subscription, entry) => {
+const addOrUpdatePaymentHistoryEntry = (subscription, entry) => {
+    if (entry.razorpayOrderId) {
+        const existing = subscription.paymentHistory.find((item) => (
+            item.razorpayOrderId === entry.razorpayOrderId
+            && item.paymentStatus === "pending"
+        ))
+        if (existing) {
+            Object.assign(existing, {
+                date: entry.date || existing.date || new Date(),
+                amount: entry.amount,
+                paymentStatus: entry.paymentStatus,
+                failureReason: entry.failureReason,
+                razorpayPaymentId: entry.razorpayPaymentId,
+                razorpayOrderId: entry.razorpayOrderId,
+                event: entry.event
+            })
+            return
+        }
+    }
+
     subscription.paymentHistory.push({
         date: new Date(),
         amount: entry.amount,
@@ -95,7 +114,7 @@ const addPaymentHistoryEntry = (subscription, entry) => {
         razorpayPaymentId: entry.razorpayPaymentId,
         razorpayOrderId: entry.razorpayOrderId,
         event: entry.event
-    });
+    })
 }
 
 exports.handleRazorpayWebhook = async (req, res) => {
@@ -126,7 +145,7 @@ exports.handleRazorpayWebhook = async (req, res) => {
                 && payment.order_id
                 && subscription.pendingUpgrade.razorpayOrderId === payment.order_id;
 
-            addPaymentHistoryEntry(subscription, {
+            addOrUpdatePaymentHistoryEntry(subscription, {
                 amount: paidAmount,
                 paymentStatus: "failed",
                 failureReason: payment.error_description || payment.error_reason || "Payment failed",
@@ -162,7 +181,7 @@ exports.handleRazorpayWebhook = async (req, res) => {
                 : subscription.monthlyPrice;
 
             if (paidAmount !== null && expectedAmount !== null && paidAmount !== expectedAmount) {
-                addPaymentHistoryEntry(subscription, {
+                addOrUpdatePaymentHistoryEntry(subscription, {
                     amount: paidAmount,
                     paymentStatus: "failed",
                     failureReason: "amount_mismatch",
@@ -194,7 +213,7 @@ exports.handleRazorpayWebhook = async (req, res) => {
                 clearPastDue(subscription)
             }
 
-            addPaymentHistoryEntry(subscription, {
+            addOrUpdatePaymentHistoryEntry(subscription, {
                 amount: paidAmount !== null ? paidAmount : expectedAmount,
                 paymentStatus: "success",
                 failureReason: undefined,
@@ -436,6 +455,132 @@ exports.deletePaymentMethod = async(req,res)=>{
         return res.status(500).json({
             success: false,
             message: "Unable to delete payment method"
+        })
+    }
+}
+
+// here , the new payment record is made from old latest failed payment record. The old payment record stays as it is.
+//we can also edit the old payment record but it would make us loose the old payment record.
+exports.retryPayment = async (req, res) => {
+    const session = await mongoose.startSession()
+    session.startTransaction()
+    try {
+        const { id } = req.params
+
+        if (!mongoose.Types.ObjectId.isValid(id)) {
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(400).json({
+                success: false,
+                message: "Invalid payment method id"
+            })
+        }
+
+        const method = await PaymentMethod.findById(id).session(session)
+        if (!method) {
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(404).json({
+                success: false,
+                message: "Payment method not found"
+            })
+        }
+
+        if (method.status !== "active") {
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(400).json({
+                success: false,
+                message: "Payment method is not active"
+            })
+        }
+
+        const user = await User.findById(method.userId).session(session)
+        if (!user) {
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(404).json({
+                success: false,
+                message: "User not found for this payment method"
+            })
+        }
+
+        const subscription = await Subscription.findOne({ userId: method.userId }).session(session)
+        if (!subscription) {
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(404).json({
+                success: false,
+                message: "Subscription not found for this user"
+            })
+        }
+
+        const lastEntry = subscription.paymentHistory[subscription.paymentHistory.length - 1]
+        if (!lastEntry || lastEntry.paymentStatus !== "failed") {
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(400).json({
+                success: false,
+                message: "No failed payment available to retry"
+            })
+        }
+
+        const isUpgradeRetry = !!(
+            subscription.pendingUpgrade
+            && lastEntry.razorpayOrderId
+            && subscription.pendingUpgrade.razorpayOrderId === lastEntry.razorpayOrderId
+        )
+
+        const expectedAmount = isUpgradeRetry
+            ? subscription.pendingUpgrade.expectedAmount
+            : subscription.monthlyPrice
+
+        if (!expectedAmount || expectedAmount <= 0) {
+            await session.abortTransaction()
+            session.endSession()
+            return res.status(400).json({
+                success: false,
+                message: "Invalid amount for retry"
+            })
+        }
+
+        const order = await razorpay.orders.create({
+            amount: Math.round(expectedAmount * 100),
+            currency: "INR",
+            receipt: `retry_${subscription._id}_${Date.now()}`,
+            notes: {
+                userId: String(user._id),
+                subscriptionId: String(subscription._id),
+                paymentMethodId: String(method._id),
+                retryFor: isUpgradeRetry ? "upgrade" : "renewal"
+            }
+        })
+
+        subscription.paymentHistory.push({
+            date: new Date(),
+            amount: expectedAmount,
+            paymentStatus: "pending",
+            failureReason: undefined,
+            razorpayOrderId: order.id,
+            event: "retry.initiated"
+        })
+
+        await subscription.save({ session })
+        await session.commitTransaction()
+        session.endSession()
+
+        return res.status(200).json({
+            success: true,
+            order,
+            message: "Retry order created"
+        })
+    } catch (error) {
+        await session.abortTransaction()
+        session.endSession()
+        console.error("Error in retryPayment controller...", error)
+        return res.status(500).json({
+            success: false,
+            message: "Unable to retry payment"
         })
     }
 }
