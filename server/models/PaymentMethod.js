@@ -2,7 +2,8 @@ const mongoose = require("mongoose");
 
 const paymentMethodSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    razorpayCardId: { type: String, required: true, unique: true },
+    razorpayMethodId: { type: String, required: true, unique: true },
+    razorpayCardId: { type: String, unique: true, sparse: true },
     razorpayTokenId: { type: String },
     razorpayCustomerId: { type: String },
     methodType: { type: String, default: "card" },

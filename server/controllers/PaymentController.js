@@ -222,11 +222,13 @@ exports.handleRazorpayWebhook = async (req, res) => {
 
             const updateData = {
                 userId: user._id,
+                razorpayMethodId: uniqueMethodId,
                 razorpayCardId: payment.card_id || null, 
                 razorpayTokenId: payment.token_id || null,
                 razorpayCustomerId: payment.customer_id, 
                 methodType: payment.method,
-                isDefault: true
+                isDefault: true,
+                status: "active"
             };
 
             console.log("update data before method specific details..:",updateData)
@@ -267,9 +269,9 @@ exports.handleRazorpayWebhook = async (req, res) => {
             }
 
             // 5. Update Payment Method Database
-            await PaymentMethod.updateMany({ userId: user._id }, { isDefault: false });
+            await PaymentMethod.updateMany({ userId: user._id, status: "active" }, { isDefault: false });
             await PaymentMethod.findOneAndUpdate(
-                { razorpayCardId: uniqueMethodId }, // Or use a compound key
+                { razorpayMethodId: uniqueMethodId },
                 updateData,
                 { upsert: true, new: true }
             );
@@ -285,7 +287,7 @@ exports.handleRazorpayWebhook = async (req, res) => {
 };
 
 
-
+//here we are using the userId
 exports.getCustomerPaymentMethod = async(req,res)=>{
     try{
         const {id} = req.params
@@ -298,7 +300,8 @@ exports.getCustomerPaymentMethod = async(req,res)=>{
             });
         }
 
-        const methods = await PaymentMethod.find({userId:id}).sort({isDefault:-1,createdAt:-1})
+        const methods = await PaymentMethod.find({ userId: id, status: "active" })
+            .sort({ isDefault: -1, createdAt: -1 })
 
         const formattedMethods = methods.map(method=>{
             const baseInfo = {
@@ -356,38 +359,83 @@ exports.getCustomerPaymentMethod = async(req,res)=>{
     }
 }
 
-
+//here, we are getting paymentMethodId from req.paramas
 exports.deletePaymentMethod = async(req,res)=>{
     const session = await mongoose.startSession()
     session.startTransaction()
     try{
         const {id} = req.params
 
-        const user = await User.findById(id)
-        if(!user){
+        if (!mongoose.Types.ObjectId.isValid(id)) {
             await session.abortTransaction()
             session.endSession()
             return res.status(400).json({
-                success:false,
-                message:`user not found`
+                success: false,
+                message: "invalid payment method id"
             })
         }
 
-        const methods = await PaymentMethod.find({userId:id}).sort({createdAt:-1})
-        if(!methods){
+        const method = await PaymentMethod.findById(id).session(session)
+        if(!method){
             await session.abortTransaction()
             session.endSession()
-            return res.status(400).json({
+            return res.status(404).json({
                 success:false,
-                message:`no paymentMethod details found in database`
+                message:"payment method not found"
             })
         }
 
-        const deletedPaymentMethods = methods.map(method=>{
-            
+        if (method.isDefault) {
+            const activeSubscription = await Subscription.findOne({
+                userId: method.userId,
+                status: "Active"
+            }).session(session)
+
+            if (activeSubscription) {
+                await session.abortTransaction()
+                session.endSession()
+                return res.status(400).json({
+                    success: false,
+                    message: "Cannot delete the default payment method for a user with an active subscription."
+                })
+            }
+        }
+
+        let newDefault = null
+        if (method.isDefault) {
+            newDefault = await PaymentMethod.findOne({
+                userId: method.userId,
+                _id: { $ne: method._id },
+                status: "active"
+            }).sort({ createdAt: -1 }).session(session)
+
+            if (newDefault) {
+                newDefault.isDefault = true
+                await newDefault.save({ session })
+            }
+        }
+
+        method.status = "deleted"
+        method.isDefault = false
+        await method.save({ session })
+
+        await session.commitTransaction()
+        session.endSession()
+
+        return res.status(200).json({
+            success: true,
+            message: "Payment method deleted",
+            deletedId: method._id,
+            newDefaultId: newDefault ? newDefault._id : null
         })
 
     } catch(error){
+        await session.abortTransaction()
+        session.endSession()
         console.log("Error in delete paymentMethod controller....",error)
+        return res.status(500).json({
+            success: false,
+            message: "Unable to delete payment method"
+        })
     }
 }
