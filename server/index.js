@@ -46,7 +46,7 @@ app.use("/api/v1/cohort",cohortRoute)
 app.use("/api/v1/segmentation",segmentationRoute)
 app.use("/api/v1/forecasting",forecastingRoute)
 app.use("/api/v1/payment",paymentRoute)
-app.use("/api/v1/invoices")
+app.use("/api/v1/invoices", inoviceRoute)
 
 app.get("/",(req,res)=>{
     return res.json({
