@@ -73,10 +73,10 @@ const subscriptionSchema = new mongoose.Schema({
         date: Date,
         amount: Number,
         paymentStatus: { type: String, enum: ["success", "failed", "pending"] },
-            failureReason: String,
-            razorpayPaymentId: String,
-            razorpayOrderId: String,
-            event: String
+        failureReason: String,
+        razorpayPaymentId: String,
+        razorpayOrderId: String,
+        event: String
     }],
 },{timestamps:true})
 

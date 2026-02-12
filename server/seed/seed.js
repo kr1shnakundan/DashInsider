@@ -1,6 +1,7 @@
 const database = require("../config/database");
 const User = require("../models/User");
 const Subscription = require("../models/Subscription");
+const PaymentMethod = require("../models/PaymentMethod");
 const dayjs = require("dayjs");
 require("dotenv").config();
 const bcrypt = require("bcrypt")
@@ -14,6 +15,23 @@ const plans = [
 
 const RandomDate = (daysBack = 90) =>{
    return dayjs().subtract(Math.floor(Math.random()*daysBack),"day").toDate();
+}
+
+const randomId = (prefix) => {
+    return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+const randomCardDetails = () => {
+    const networks = ["Visa", "Mastercard", "Rupay", "Amex"];
+    const cardTypes = ["credit", "debit"];
+    return {
+        last4: `${Math.floor(1000 + Math.random() * 9000)}`,
+        network: networks[Math.floor(Math.random() * networks.length)],
+        cardType: cardTypes[Math.floor(Math.random() * cardTypes.length)],
+        issuer: "Demo Bank",
+        expiryMonth: Math.floor(Math.random() * 12) + 1,
+        expiryYear: new Date().getFullYear() + Math.floor(Math.random() * 5) + 1
+    };
 }
 
 const generatePaymentHistoryAndStatus = (subscriptionType,startedDate) => {
@@ -90,11 +108,15 @@ const generatePaymentHistoryAndStatus = (subscriptionType,startedDate) => {
             }
         
         }
+        const orderId = randomId("order");
         history.push({
             date:paymentDate,
             amount: plan.monthlyPrice,
             paymentStatus: paymentStatus,
-            failureReason:paymentStatus === "failed" ? failureReason : undefined
+            failureReason:paymentStatus === "failed" ? failureReason : undefined,
+            razorpayPaymentId: paymentStatus === "success" ? randomId("pay") : undefined,
+            razorpayOrderId: orderId,
+            event: paymentStatus === "success" ? "invoice.paid" : paymentStatus === "failed" ? "payment.failed" : "payment.pending"
         })
     }
     
@@ -134,6 +156,7 @@ const seed = async()=>{
         await User.deleteMany({});
         await Subscription.deleteMany({});
         await Profile.deleteMany({});
+        await PaymentMethod.deleteMany({});
         
         console.log("seeding new data...");
 
@@ -223,6 +246,37 @@ const seed = async()=>{
                 }
             }
 
+            let pastDueSince = null;
+            let graceUntil = null;
+            if (status === "Past_due") {
+                const lastPayment = paymentHistory.length > 0 
+                    ? paymentHistory[paymentHistory.length - 1].date
+                    : startedDate;
+                pastDueSince = dayjs(lastPayment).add(30, "day").toDate();
+                graceUntil = dayjs(pastDueSince).add(7, "day").toDate();
+            }
+
+            const includePendingDowngrade = status === "Active" && Math.random() < 0.05 && plan.name !== "Free";
+            const includePendingUpgrade = status === "Active" && Math.random() < 0.05 && plan.name !== "Premium";
+
+            const pendingDowngrade = includePendingDowngrade ? {
+                planType: plan.name === "Premium" ? "Pro" : "Free",
+                monthlyPrice: plan.name === "Premium" ? 499 : 0,
+                effectiveDate: dayjs().add(Math.floor(Math.random() * 20) + 1, "day").toDate()
+            } : undefined;
+
+            const pendingUpgrade = includePendingUpgrade ? {
+                planType: plan.name === "Free" ? "Pro" : "Premium",
+                monthlyPrice: plan.name === "Free" ? 499 : 999,
+                expectedAmount: plan.name === "Free" ? 499 : 999,
+                razorpayOrderId: randomId("order"),
+                requestedAt: RandomDate(20)
+            } : undefined;
+
+            const razorpayCustomerId = plan.monthlyPrice > 0 ? randomId("cust") : undefined;
+            const razorpayPlanId = plan.monthlyPrice > 0 ? randomId("plan") : undefined;
+            const razorpaySubscriptionId = plan.monthlyPrice > 0 ? randomId("sub") : undefined;
+
             await Subscription.create({
                 userId:user._id,
                 subscriptionType:plan.name,
@@ -231,8 +285,29 @@ const seed = async()=>{
                 renewalDate: renewalDate,
                 cancellationDate: cancellationDate,
                 monthlyPrice:plan.monthlyPrice,
+                razorpayCustomerId,
+                razorpaySubscriptionId,
+                razorpayPlanId,
+                pastDueSince,
+                graceUntil,
+                pendingDowngrade,
+                pendingUpgrade,
                 paymentHistory:paymentHistory
             })
+
+            if (plan.monthlyPrice > 0 && razorpayCustomerId) {
+                await PaymentMethod.create({
+                    userId: user._id,
+                    razorpayMethodId: randomId("pm"),
+                    razorpayCardId: randomId("card"),
+                    razorpayTokenId: randomId("token"),
+                    razorpayCustomerId,
+                    methodType: "card",
+                    cardDetails: randomCardDetails(),
+                    isDefault: true,
+                    status: "active"
+                });
+            }
 
              subscriptionCount++;
 
@@ -258,9 +333,11 @@ const seed = async()=>{
         
         const totalUsers = await User.countDocuments();
         const totalSubs = await Subscription.countDocuments();
+        const totalPaymentMethods = await PaymentMethod.countDocuments();
         
         console.log(`Total Users: ${totalUsers}`);
         console.log(`Total Subscriptions: ${totalSubs}`);
+        console.log(`Total Payment Methods: ${totalPaymentMethods}`);
         
         // Subscription status breakdown
         const statusCounts = await Subscription.aggregate([
