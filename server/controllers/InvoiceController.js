@@ -475,7 +475,6 @@ exports.downloadInvoicePdf = async (req, res) => {
 			args: ["--no-sandbox", "--disable-setuid-sandbox"]
 		})
 		const page = await browser.newPage()
-		await page.setContent(htmlDocument, { waitUntil: "networkidle0" })
 
 		const pdfBuffer = await page.pdf({
 			format: "A4",
