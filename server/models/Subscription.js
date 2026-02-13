@@ -33,8 +33,39 @@ const subscriptionSchema = new mongoose.Schema({
     status:{
         type:String,
         required:true,
-        enum:["Active","Canceled","Past_due"],
+        enum:["Active","Canceled","Past_due","Paused"],
         default:"Active"
+    },
+    pausedAt: {
+        type: Date
+    },
+    pauseReason: {
+        type: String
+    },
+    pausedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User"
+    },
+    previousStatus: {
+        type: String,
+        enum: ["Active", "Canceled", "Past_due", "Paused"]
+    },
+    canceledBy:{
+        type: mongoose.Schema.Types.ObjectId,
+        ref:"User"
+    },
+    cancelReason:{
+        type:String,
+    },
+    planChangedBy:{
+        type: mongoose.Schema.Types.ObjectId,
+        ref:"User"
+    },
+    planChangedAt:{
+        type: Date,
+    },
+    planChangeReason:{
+        type: String,
     },
     razorpayCustomerId: {
         type: String
@@ -59,16 +90,16 @@ const subscriptionSchema = new mongoose.Schema({
         monthlyPrice: {type: Number},
         effectiveDate: {type: Date}
     },
-        pendingUpgrade: {
-            planType: {
-                type: String,
-                enum: ["Free", "Pro", "Premium"]
-            },
-            monthlyPrice: { type: Number },
-            expectedAmount: { type: Number },
-            razorpayOrderId: { type: String },
-            requestedAt: { type: Date }
+    pendingUpgrade: {
+        planType: {
+            type: String,
+            enum: ["Free", "Pro", "Premium"]
         },
+        monthlyPrice: { type: Number },
+        expectedAmount: { type: Number },
+        razorpayOrderId: { type: String },
+        requestedAt: { type: Date }
+    },
      // Payment history
     paymentHistory: [{
         date: Date,

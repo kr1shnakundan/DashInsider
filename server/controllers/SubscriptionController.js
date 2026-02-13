@@ -376,3 +376,182 @@ exports.createPayNowOrder = async (req, res) => {
         })
     }
 }
+
+exports.adminPauseSubscription = async (req, res) => {
+    try {
+        const { id } = req.params
+        const { reason } = req.body || {}
+
+        const subscription = await Subscription.findOne({userId:id})
+        if (!subscription) {
+            return res.status(404).json({
+                success: false,
+                message: "Subscription not found"
+            })
+        }
+
+        if (subscription.status === "Paused") {
+            return res.status(400).json({
+                success: false,
+                message: "Subscription is already paused"
+            })
+        }
+
+        if (subscription.status === "Canceled") {
+            return res.status(400).json({
+                success: false,
+                message: "Canceled subscriptions cannot be paused"
+            })
+        }
+
+        if (subscription.razorpaySubscriptionId) {
+            try {
+                await razorpay.subscriptions.pause(subscription.razorpaySubscriptionId, {
+                    pause_at: "now"
+                })
+            } catch (error) {
+                console.log("Error pausing Razorpay subscription...", error)
+                return res.status(502).json({
+                    success: false,
+                    message: "Unable to pause Razorpay subscription"
+                })
+            }
+        }
+
+        subscription.previousStatus = subscription.status
+        subscription.status = "Paused"
+        subscription.pausedAt = new Date()
+        subscription.pauseReason = reason || undefined
+        subscription.pausedBy = req.user.id
+        subscription.pendingDowngrade = undefined
+        subscription.pendingUpgrade = undefined
+
+        await subscription.save()
+
+        return res.status(200).json({
+            success: true,
+            subscription,
+            message: "Subscription paused successfully"
+        })
+    } catch (error) {
+        console.log("Error in adminPauseSubscription...", error)
+        return res.status(500).json({
+            success: false,
+            message: "Unable to pause subscription"
+        })
+    }
+}
+
+exports.adminResumeSubscription = async (req, res) => {
+    try {
+        const { id } = req.params
+
+        const subscription = await Subscription.findOne({userId:id})
+        if (!subscription) {
+            return res.status(404).json({
+                success: false,
+                message: "Subscription not found"
+            })
+        }
+
+        if (subscription.status !== "Paused") {
+            return res.status(400).json({
+                success: false,
+                message: "Subscription is not paused"
+            })
+        }
+
+        if (subscription.razorpaySubscriptionId) {
+            try {
+                await razorpay.subscriptions.resume(subscription.razorpaySubscriptionId, {
+                    resume_at: "now"
+                })
+            } catch (error) {
+                console.log("Error resuming Razorpay subscription...", error)
+                return res.status(502).json({
+                    success: false,
+                    message: "Unable to resume Razorpay subscription"
+                })
+            }
+        }
+
+        subscription.status = subscription.previousStatus || "Active"
+        subscription.previousStatus = undefined
+        subscription.pausedAt = undefined
+        subscription.pauseReason = undefined
+        subscription.pausedBy = undefined
+
+        await subscription.save()
+
+        return res.status(200).json({
+            success: true,
+            subscription,
+            message: "Subscription resumed successfully"
+        })
+    } catch (error) {
+        console.log("Error in adminResumeSubscription...", error)
+        return res.status(500).json({
+            success: false,
+            message: "Unable to resume subscription"
+        })
+    }
+}
+
+
+exports.adminCancelSubscription = async (req, res) => {
+    try {
+        const { id } = req.params
+        const { reason } = req.body || {}
+
+        const subscription = await Subscription.findOne({userId:id})
+        if (!subscription) {
+            return res.status(404).json({
+                success: false,
+                message: "Subscription not found"
+            })
+        }
+
+        if (subscription.status === "Canceled") {
+            return res.status(400).json({
+                success: false,
+                message: "Subscription is already canceled"
+            })
+        }
+
+        if (subscription.razorpaySubscriptionId) {
+            try {
+                await razorpay.subscriptions.cancel(subscription.razorpaySubscriptionId)
+            } catch (error) {
+                console.log("Error canceling Razorpay subscription...", error)
+                return res.status(502).json({
+                    success: false,
+                    message: "Unable to cancel Razorpay subscription"
+                })
+            }
+        }
+
+        subscription.previousStatus = subscription.status
+        subscription.status = "Canceled"
+        subscription.cancellationDate = new Date()
+        subscription.cancelReason = reason || undefined
+        subscription.canceledBy = req.user.id
+        subscription.pendingDowngrade = undefined
+        subscription.pendingUpgrade = undefined
+        subscription.razorpaySubscriptionId = undefined
+        subscription.razorpayPlanId = undefined
+
+        await subscription.save()
+
+        return res.status(200).json({
+            success: true,
+            subscription,
+            message: "Subscription canceled successfully"
+        })
+    } catch (error) {
+        console.log("Error in adminCancelSubscription...", error)
+        return res.status(500).json({
+            success: false,
+            message: "Unable to cancel subscription"
+        })
+    }
+}
