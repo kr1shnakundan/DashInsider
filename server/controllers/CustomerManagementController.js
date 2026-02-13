@@ -1,6 +1,7 @@
 const User = require("../models/User");
 const Subscription = require("../models/Subscription");
 const Profile = require("../models/Profile");
+const CustomerNote = require("../models/CustomerNote");
 const mongoose = require("mongoose");
 
 /**
@@ -15,7 +16,7 @@ const mongoose = require("mongoose");
  *  - sort: sort field (createdAt, lastActiveAt, default: createdAt)
  *  - order: sort order (asc, desc, default: desc)
  */
-exports.getCustomers = async (req, res) => {
+exports.getFilteredCustomers = async (req, res) => {
   try {
     const {
       q = "",
@@ -203,8 +204,9 @@ exports.updateCustomer = async (req, res) => {
     await user.save();
 
     // Update profile if provided
+    let profile = null;
     if (contactNumber || profession) {
-      const profile = await Profile.findByIdAndUpdate(
+        profile = await Profile.findByIdAndUpdate(
         user.additionalDetails,
         { contactNumber, profession },
         { new: true, runValidators: true }
@@ -213,7 +215,10 @@ exports.updateCustomer = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: user,
+      data: {
+        user:user,
+        profile:profile
+      },
       message: "Customer updated successfully",
     });
   } catch (error) {
@@ -221,6 +226,240 @@ exports.updateCustomer = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Unable to update customer",
+    });
+  }
+};
+
+
+exports.addCustomerNote = async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const { body } = req.body;
+    const authorId = req.user?.id;
+
+    if (!authorId) {
+      return res.status(401).json({
+        success: false,
+        message: "Unauthorized",
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid customer ID",
+      });
+    }
+
+    if (!body || !body.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Note body is required",
+      });
+    }
+
+    const customer = await User.findById(customerId).select("_id");
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    const customerNote = await CustomerNote.create({
+      customerId,
+      authorId,
+      body: body.trim(),
+    });
+
+    return res.status(201).json({
+      success: true,
+      data: customerNote,
+      message: "Customer note created successfully",
+    });
+  } catch (error) {
+    console.log("error in addCustomerNote..: ", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to add customer note",
+    });
+  }
+};
+
+
+/**
+ * GET /admin/customers/:customerId/notes
+ * Get all notes for a specific customer
+ */
+exports.getCustomerNotes = async (req, res) => {
+  try {
+    const { customerId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid customer ID",
+      });
+    }
+
+    const customer = await User.findById(customerId).select("_id");
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    const customerNotes = await CustomerNote.find({ customerId })
+      .populate({
+        path: "authorId",
+        select: "firstName lastName email",
+      })
+      .sort({ createdAt: -1 })
+      .lean();
+
+    return res.status(200).json({
+      success: true,
+      data: customerNotes,
+      message: "Customer notes fetched successfully",
+    });
+  } catch (error) {
+    console.log("Error while getting customerNotes...", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch customer notes",
+    });
+  }
+};
+
+/**
+ * GET /admin/customers/:customerId/activity
+ * Get subscription and payment activity history for a customer
+ */
+exports.getCustomerActivity = async (req, res) => {
+  try {
+    const { customerId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid customer ID",
+      });
+    }
+
+    const customer = await User.findById(customerId).select("_id createdAt");
+    if (!customer) {
+      return res.status(404).json({
+        success: false,
+        message: "Customer not found",
+      });
+    }
+
+    const subscription = await Subscription.findOne({ userId: customerId }).lean();
+
+    const activity = [];
+
+    // Add account creation event
+    activity.push({
+      type: "account_created",
+      date: customer.createdAt,
+      description: "Account created",
+    });
+
+    if (subscription) {
+      // Add subscription start event
+      activity.push({
+        type: "subscription_started",
+        date: subscription.startedDate,
+        description: "Subscription started",
+      });
+
+      // Add payment history events
+      if (subscription.paymentHistory && subscription.paymentHistory.length > 0) {
+        subscription.paymentHistory.forEach((payment) => {
+          activity.push({
+            type: payment.paymentStatus === "success" ? "payment_success" : "payment_failed",
+            date: payment.date,
+            description:
+              payment.paymentStatus === "success"
+                ? `Payment of ₹${payment.amount} successful`
+                : `Payment of ₹${payment.amount} failed`,
+            amount: payment.amount,
+            status: payment.paymentStatus,
+            razorpayPaymentId: payment.razorpayPaymentId,
+            failureReason: payment.failureReason,
+            event: payment.event,
+          });
+        });
+      }
+
+      // Add pending upgrade event
+      if (subscription.pendingUpgrade && subscription.pendingUpgrade.requestedAt) {
+        activity.push({
+          type: "upgrade_requested",
+          date: subscription.pendingUpgrade.requestedAt,
+          description: `Upgrade to ${subscription.pendingUpgrade.planType} plan requested`,
+          plan: subscription.pendingUpgrade.planType,
+          amount: subscription.pendingUpgrade.expectedAmount,
+        });
+      }
+
+      // Add pending downgrade event
+      if (subscription.pendingDowngrade && subscription.pendingDowngrade.effectiveDate) {
+        activity.push({
+          type: "downgrade_scheduled",
+          date: subscription.pendingDowngrade.effectiveDate,
+          description: `Downgrade to ${subscription.pendingDowngrade.planType} plan scheduled`,
+          plan: subscription.pendingDowngrade.planType,
+        });
+      }
+
+      // Add cancellation event
+      if (subscription.cancellationDate) {
+        activity.push({
+          type: "subscription_canceled",
+          date: subscription.cancellationDate,
+          description: "Subscription canceled",
+        });
+      }
+
+      // Add past due event
+      if (subscription.pastDueSince) {
+        activity.push({
+          type: "past_due",
+          date: subscription.pastDueSince,
+          description: "Subscription marked as past due",
+          graceUntil: subscription.graceUntil,
+        });
+      }
+
+      // Add current status
+      activity.push({
+        type: "current_status",
+        date: subscription.updatedAt || new Date(),
+        description: `Current status: ${subscription.status}`,
+        status: subscription.status,
+        plan: subscription.subscriptionType,
+      });
+    }
+
+    // Sort by date ascending (oldest first - chronological timeline)
+    activity.sort((a, b) => new Date(a.date) - new Date(b.date));
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        customerId: customer._id,
+        activity,
+        totalEvents: activity.length,
+      },
+      message: "Customer activity fetched successfully",
+    });
+  } catch (error) {
+    console.log("Error while getting customer activity...", error);
+    return res.status(500).json({
+      success: false,
+      message: "Unable to fetch customer activity",
     });
   }
 };

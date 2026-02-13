@@ -37,6 +37,7 @@ const segmentationRoute = require("./routes/SegmentationRoute")
 const forecastingRoute = require("./routes/forecastingRoute")
 const paymentRoute = require("./routes/PaymentRoute")
 const inoviceRoute = require("./routes/InvoiceRoute")
+const customerManagementRoute = require("./routes/CustomerManagementRoute")
 
 app.use("/api/v1/auth",userRoute);
 app.use("/api/v1/metrics",metriceRoute)
@@ -47,6 +48,7 @@ app.use("/api/v1/segmentation",segmentationRoute)
 app.use("/api/v1/forecasting",forecastingRoute)
 app.use("/api/v1/payment",paymentRoute)
 app.use("/api/v1/invoices", inoviceRoute)
+app.use("/api/v1/customers", customerManagementRoute)
 
 app.get("/",(req,res)=>{
     return res.json({
