@@ -14,6 +14,8 @@ const auditLogSchema = new mongoose.Schema({
             "subscription:resume",
             "subscription:cancel",
             "subscription:plan-change",
+            "subscription:clear-past-due",
+            "subscription:reactivate",
             "user:create",
             "user:update",
             "customer:note-add",

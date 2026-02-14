@@ -7,7 +7,8 @@ const {getSubscriptions,
     adminPauseSubscription,
     adminResumeSubscription, 
     adminCancelSubscription,
-    adminChangePlan
+    adminChangePlan,
+    adminClearPastDue
 } = require("../controllers/SubscriptionController")
 
 const {auth, requiredRoles} = require("../middlewares/authMiddleware")
@@ -19,6 +20,7 @@ router.post("/:id/pause", auth, requiredRoles("Admin"), adminPauseSubscription)
 router.post("/:id/resume", auth, requiredRoles("Admin"), adminResumeSubscription)
 router.post("/:id/cancel", auth, requiredRoles("Admin"), adminCancelSubscription)
 router.put("/:id/plan", auth, requiredRoles("Admin"), adminChangePlan)
+router.post("/:id/clear-past-due", auth, requiredRoles("Admin"), adminClearPastDue)
 
 
 module.exports = router

@@ -6,6 +6,8 @@ const actionMap = {
     "POST:/api/v1/subscriptions/:id/resume": "subscription:resume",
     "POST:/api/v1/subscriptions/:id/cancel": "subscription:cancel",
     "PUT:/api/v1/subscriptions/:id/plan": "subscription:plan-change",
+    "POST:/api/v1/subscriptions/:id/clear-past-due": "subscription:clear-past-due",
+    "POST:/api/v1/subscriptions/:id/reactivate": "subscription:reactivate",
     "PUT:/api/v1/customers/:customerId/update": "user:update",
     "POST:/api/v1/customers/:customerId/addnote": "customer:note-add",
     "POST:/api/v1/payment/admin/payment-methods/:id/retry": "payment:retry",

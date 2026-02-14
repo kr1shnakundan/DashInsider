@@ -47,6 +47,21 @@ const createRazorpaySubscriptionForPlan = async (subscription, planType) => {
     return created
 }
 
+const logSubscriptionFailure = async (req, action, targetId, metadata, changes, errorMessage) => {
+    await createAuditLog({
+        actorId: req.user?.id,
+        action,
+        targetType: "Subscription",
+        targetId,
+        metadata,
+        changes,
+        ip: req.ip || req.connection?.remoteAddress,
+        userAgent: req.get("user-agent"),
+        status: "failure",
+        errorMessage
+    })
+}
+
 
 exports.getSubscriptions = async(req,res)=>{
     try{
@@ -720,7 +735,7 @@ exports.adminChangePlan = async (req, res) => {
             })
         }
 
-        const subscription = await Subscription.findById(id)
+        const subscription = await Subscription.findOne({userId:id})
         if (!subscription) {
             return res.status(404).json({
                 success: false,
@@ -865,6 +880,303 @@ exports.adminChangePlan = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: "Unable to change subscription plan"
+        })
+    }
+}
+
+exports.adminClearPastDue = async (req, res) => {
+    try {
+        const { id } = req.params
+        const { reason, amount } = req.body || {}
+
+        const subscription = await Subscription.findOne({userId:id})
+        if (!subscription) {
+            await logSubscriptionFailure(
+                req,
+                "subscription:clear-past-due",
+                id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+                { before: null, after: null },
+                "Subscription not found"
+            )
+            return res.status(404).json({
+                success: false,
+                auditLogged: true,
+                message: "Subscription not found"
+            })
+        }
+
+        const beforeState = {
+            status: subscription.status,
+            pastDueSince: subscription.pastDueSince,
+            graceUntil: subscription.graceUntil,
+            renewalDate: subscription.renewalDate,
+            monthlyPrice: subscription.monthlyPrice
+        }
+
+        if (subscription.status !== "Past_due") {
+            await logSubscriptionFailure(
+                req,
+                "subscription:clear-past-due",
+                subscription._id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+                { before: beforeState, after: null },
+                "Subscription is not past due"
+            )
+            return res.status(400).json({
+                success: false,
+                auditLogged: true,
+                message: "Subscription is not past due"
+            })
+        }
+
+        subscription.status = "Active"
+        subscription.pastDueSince = undefined
+        subscription.graceUntil = undefined
+        subscription.renewalDate = dayjs().add(30, "day").toDate()
+
+        const clearedAmount = Number.isFinite(Number(amount)) ? Number(amount) : 0
+        subscription.paymentHistory.push({
+            date: new Date(),
+            amount: clearedAmount,
+            paymentStatus: "success",
+            event: "admin_clear_past_due"
+        })
+
+        await subscription.save()
+
+        const afterState = {
+            status: subscription.status,
+            pastDueSince: subscription.pastDueSince,
+            graceUntil: subscription.graceUntil,
+            renewalDate: subscription.renewalDate,
+            monthlyPrice: subscription.monthlyPrice
+        }
+
+        await createAuditLog({
+            actorId: req.user?.id,
+            action: "subscription:clear-past-due",
+            targetType: "Subscription",
+            targetId: subscription._id,
+            metadata: {
+                reason: reason || null,
+                amount: clearedAmount,
+                endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+            },
+            changes: { before: beforeState, after: afterState },
+            ip: req.ip || req.connection?.remoteAddress,
+            userAgent: req.get("user-agent"),
+            status: "success"
+        })
+
+        return res.status(200).json({
+            success: true,
+            subscription,
+            auditLogged: true,
+            message: "Past-due status cleared successfully"
+        })
+    } catch (error) {
+        console.log("Error in adminClearPastDue...", error)
+        await logSubscriptionFailure(
+            req,
+            "subscription:clear-past-due",
+            req.params?.id,
+            { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+            { before: null, after: null },
+            "Unable to clear past-due status"
+        )
+        return res.status(500).json({
+            success: false,
+            auditLogged: true,
+            message: "Unable to clear past-due status"
+        })
+    }
+}
+
+
+
+exports.adminReactivateSubscription = async(req,res) =>{
+    try{
+        const {id} = req.params
+        const {plan, reason, amount} = req.body || {}
+
+        const subscription = await Subscription.findOne({userId:id})
+        if(!subscription){
+            await logSubscriptionFailure(
+                req,
+                "subscription:reactivate",
+                id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+                { before: null, after: null },
+                "Subscription not found for this customer"
+            )
+            return res.status(400).json({
+                success:false,
+                auditLogged: true,
+                message:`subscription not found for this customer`
+            })
+        }
+
+        const effectivePlan = plan || subscription.subscriptionType
+        if (!pricing[effectivePlan]) {
+            await logSubscriptionFailure(
+                req,
+                "subscription:reactivate",
+                subscription._id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`, plan: effectivePlan },
+                { before: null, after: null },
+                "Invalid plan"
+            )
+            return res.status(400).json({
+                success: false,
+                auditLogged: true,
+                message: "Invalid plan"
+            })
+        }
+
+        const beforeState = {
+            previousStatus : subscription.previousStatus,
+            subscriptionType:subscription.subscriptionType,
+            status:subscription.status,
+            cancellationDate:subscription.cancellationDate,
+            cancelReason:subscription.cancelReason || undefined,
+            canceledBy:subscription.canceledBy || undefined
+        }
+
+        if(subscription.status !== "Canceled"){
+            await logSubscriptionFailure(
+                req,
+                "subscription:reactivate",
+                subscription._id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+                { before: beforeState, after: null },
+                "Subscription is not canceled"
+            )
+            return res.status(400).json({
+                success:false,
+                auditLogged: true,
+                message:`subscription is not canceled`
+            })
+        }
+
+        subscription.subscriptionType = effectivePlan
+        subscription.status = "Active"
+        subscription.monthlyPrice = pricing[effectivePlan]
+        subscription.startedDate = new Date()
+        subscription.renewalDate = dayjs().add(30, "day").toDate()
+        subscription.cancellationDate = undefined
+        subscription.cancelReason = undefined
+        subscription.canceledBy = undefined
+        subscription.previousStatus = undefined
+        subscription.pendingDowngrade = undefined
+        subscription.pendingUpgrade = undefined
+        subscription.pastDueSince = undefined
+        subscription.graceUntil = undefined
+
+        if (subscription.razorpaySubscriptionId) {
+            try {
+                await razorpay.subscriptions.cancel(subscription.razorpaySubscriptionId)
+            } catch (error) {
+                console.log("Error canceling existing Razorpay subscription...", error)
+            }
+        }
+        subscription.razorpaySubscriptionId = undefined
+        subscription.razorpayPlanId = undefined
+
+        if (pricing[effectivePlan] > 0) {
+            if (!subscription.razorpayCustomerId) {
+                await logSubscriptionFailure(
+                    req,
+                    "subscription:reactivate",
+                    subscription._id,
+                    { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`, plan: effectivePlan },
+                    { before: beforeState, after: null },
+                    "Missing Razorpay customer id for paid plan"
+                )
+                return res.status(400).json({
+                    success: false,
+                    auditLogged: true,
+                    message: "Missing Razorpay customer id for paid plan"
+                })
+            }
+
+            try {
+                await createRazorpaySubscriptionForPlan(subscription, effectivePlan)
+            } catch (error) {
+                console.log("Error creating Razorpay subscription on reactivation...", error)
+                await logSubscriptionFailure(
+                    req,
+                    "subscription:reactivate",
+                    subscription._id,
+                    { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`, plan: effectivePlan },
+                    { before: beforeState, after: null },
+                    "Unable to create Razorpay subscription"
+                )
+                return res.status(502).json({
+                    success: false,
+                    auditLogged: true,
+                    message: "Unable to create Razorpay subscription"
+                })
+            }
+        }
+
+        const reactivatedAmount = Number.isFinite(Number(amount)) ? Number(amount) : 0
+        subscription.paymentHistory.push({
+            date: new Date(),
+            amount: reactivatedAmount,
+            paymentStatus: "success",
+            event: "admin_reactivate"
+        })
+
+        await subscription.save()
+
+        const afterState = {
+            previousStatus : subscription.previousStatus,
+            subscriptionType:subscription.subscriptionType,
+            status:subscription.status,
+            cancellationDate:subscription.cancellationDate,
+            cancelReason:subscription.cancelReason || undefined,
+            canceledBy:subscription.canceledBy || undefined
+        }
+
+        await createAuditLog({
+            actorId: req.user?.id,
+            action: "subscription:reactivate",
+            targetType: "Subscription",
+            targetId: subscription._id,
+            metadata: {
+                reason: reason || null,
+                plan: effectivePlan,
+                amount: reactivatedAmount,
+                endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+            },
+            changes: { before: beforeState, after: afterState },
+            ip: req.ip || req.connection?.remoteAddress,
+            userAgent: req.get("user-agent"),
+            status: "success"
+        })
+
+        return res.status(200).json({
+            success: true,
+            subscription,
+            auditLogged: true,
+            message: "Subscription reactivated successfully"
+        })
+
+    } catch(error){
+        console.log("Error in reactivating subscription...",error)
+        await logSubscriptionFailure(
+            req,
+            "subscription:reactivate",
+            req.params?.id,
+            { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+            { before: null, after: null },
+            "Unable to reactivate subscription"
+        )
+        return res.status(500).json({
+            success:false,
+            auditLogged: true,
+            message:`Unable to reactivate subscription`
         })
     }
 }
