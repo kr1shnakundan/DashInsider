@@ -3,6 +3,22 @@ const Subscription = require("../models/Subscription")
 const mailSender = require("../utils/MailSender")
 const { InvoiceDetailsMail } = require("../mail/templates/InvoiceDetails")
 const puppeteer = require("puppeteer")
+const { createAuditLog } = require("./AuditLogController")
+
+const logInvoiceResendFailure = async (req, targetId, metadata, errorMessage) => {
+	await createAuditLog({
+		actorId: req.user?.id,
+		action: "invoice:resend",
+		targetType: "Invoice",
+		targetId,
+		metadata,
+		changes: { before: null, after: null },
+		ip: req.ip || req.connection?.remoteAddress,
+		userAgent: req.get("user-agent"),
+		status: "failure",
+		errorMessage
+	})
+}
 
 // Admin: list invoices derived from subscription payment history.
 exports.getAllInvoicesFromDB = async (req, res) => {
@@ -158,8 +174,15 @@ exports.getParticularInvoice = async (req, res) => {
 		const { id } = req.params
 
 		if (!mongoose.Types.ObjectId.isValid(id)) {
+			await logInvoiceResendFailure(
+				req,
+				id,
+				{ endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+				"Invalid invoice id"
+			)
 			return res.status(400).json({
 				success: false,
+				auditLogged: true,
 				message: "Invalid invoice id"
 			})
 		}
@@ -338,8 +361,15 @@ exports.resendInvoiceEmail = async (req, res) => {
 		const invoiceData = result[0] || null
 
 		if (!invoiceData) {
+			await logInvoiceResendFailure(
+				req,
+				id,
+				{ endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+				"Invoice not found"
+			)
 			return res.status(404).json({
 				success: false,
+				auditLogged: true,
 				message: "Invoice not found"
 			})
 		}
@@ -348,8 +378,15 @@ exports.resendInvoiceEmail = async (req, res) => {
 		const emailToSend = email || invoiceData?.userDetails?.email
 
 		if (!emailToSend) {
+			await logInvoiceResendFailure(
+				req,
+				invoiceData?.invoiceId,
+				{ endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+				"No email provided and user email not found"
+			)
 			return res.status(400).json({
 				success: false,
+				auditLogged: true,
 				message: "No email provided and user email not found"
 			})
 		}
@@ -358,11 +395,33 @@ exports.resendInvoiceEmail = async (req, res) => {
 		const mailSent = await mailSender(emailToSend, "Invoice from DashInsider", InvoiceDetailsMail(invoiceData))
 
 		if (!mailSent) {
+			await logInvoiceResendFailure(
+				req,
+				invoiceData?.invoiceId,
+				{ endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+				"Failed to send invoice email"
+			)
 			return res.status(500).json({
 				success: false,
+				auditLogged: true,
 				message: "Failed to send invoice email"
 			})
 		}
+
+		await createAuditLog({
+			actorId: req.user?.id,
+			action: "invoice:resend",
+			targetType: "Invoice",
+			targetId: invoiceData.invoiceId,
+			metadata: {
+				emailSent: emailToSend,
+				endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+			},
+			changes: { before: null, after: { emailSent: emailToSend } },
+			ip: req.ip || req.connection?.remoteAddress,
+			userAgent: req.get("user-agent"),
+			status: "success"
+		})
 
 		return res.status(200).json({
 			success: true,
@@ -371,12 +430,20 @@ exports.resendInvoiceEmail = async (req, res) => {
 				emailSent: emailToSend,
 				sentAt: new Date()
 			},
+			auditLogged: true,
 			message: "Invoice email sent successfully"
 		})
 	} catch (error) {
 		console.log("Error in resendInvoiceEmail....", error)
+		await logInvoiceResendFailure(
+			req,
+			req.params?.id,
+			{ endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+			"Error occurred while resending invoice email"
+		)
 		return res.status(500).json({
 			success: false,
+			auditLogged: true,
 			message: "Error occurred while resending invoice email"
 		})
 	}

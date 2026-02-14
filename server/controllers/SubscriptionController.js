@@ -3,6 +3,7 @@ const Subscription = require("../models/Subscription")
 const User = require("../models/User")
 const mongoose = require("mongoose")
 const Razorpay = require("razorpay")
+const { createAuditLog } = require("./AuditLogController")
 
 require("dotenv").config()
 
@@ -18,6 +19,33 @@ const pricing = {
 }
 
 const planHierarchy = { Free: 0, Pro: 1, Premium: 2 };
+
+const razorpayPlanIds = {
+    Pro: process.env.RAZORPAY_PLAN_PRO,
+    Premium: process.env.RAZORPAY_PLAN_PREMIUM
+}
+
+const createRazorpaySubscriptionForPlan = async (subscription, planType) => {
+    const planId = razorpayPlanIds[planType]
+    if (!planId) {
+        return null
+    }
+
+    if (!subscription.razorpayCustomerId) {
+        throw new Error("Missing Razorpay customer id")
+    }
+
+    const created = await razorpay.subscriptions.create({
+        plan_id: planId,
+        total_count: 120,
+        customer_notify: 1,
+        customer_id: subscription.razorpayCustomerId
+    })
+
+    subscription.razorpaySubscriptionId = created.id
+    subscription.razorpayPlanId = planId
+    return created
+}
 
 
 exports.getSubscriptions = async(req,res)=>{
@@ -390,6 +418,16 @@ exports.adminPauseSubscription = async (req, res) => {
             })
         }
 
+        const beforeState = {
+            status: subscription.status,
+            pausedAt: subscription.pausedAt,
+            pauseReason: subscription.pauseReason,
+            pausedBy: subscription.pausedBy,
+            subscriptionType: subscription.subscriptionType,
+            razorpaySubscriptionId: subscription.razorpaySubscriptionId,
+            razorpayPlanId: subscription.razorpayPlanId
+        }
+
         if (subscription.status === "Paused") {
             return res.status(400).json({
                 success: false,
@@ -428,9 +466,35 @@ exports.adminPauseSubscription = async (req, res) => {
 
         await subscription.save()
 
+        const afterState = {
+            status: subscription.status,
+            pausedAt: subscription.pausedAt,
+            pauseReason: subscription.pauseReason,
+            pausedBy: subscription.pausedBy,
+            subscriptionType: subscription.subscriptionType,
+            razorpaySubscriptionId: subscription.razorpaySubscriptionId,
+            razorpayPlanId: subscription.razorpayPlanId
+        }
+
+        await createAuditLog({
+            actorId: req.user?.id,
+            action: "subscription:pause",
+            targetType: "Subscription",
+            targetId: subscription._id,
+            metadata: {
+                reason: reason || null,
+                endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+            },
+            changes: { before: beforeState, after: afterState },
+            ip: req.ip || req.connection?.remoteAddress,
+            userAgent: req.get("user-agent"),
+            status: "success"
+        })
+
         return res.status(200).json({
             success: true,
             subscription,
+            auditLogged: true,
             message: "Subscription paused successfully"
         })
     } catch (error) {
@@ -454,6 +518,16 @@ exports.adminResumeSubscription = async (req, res) => {
             })
         }
 
+        const beforeState = {
+            status: subscription.status,
+            pausedAt: subscription.pausedAt,
+            pauseReason: subscription.pauseReason,
+            pausedBy: subscription.pausedBy,
+            subscriptionType: subscription.subscriptionType,
+            razorpaySubscriptionId: subscription.razorpaySubscriptionId,
+            razorpayPlanId: subscription.razorpayPlanId
+        }
+
         if (subscription.status !== "Paused") {
             return res.status(400).json({
                 success: false,
@@ -473,6 +547,16 @@ exports.adminResumeSubscription = async (req, res) => {
                     message: "Unable to resume Razorpay subscription"
                 })
             }
+        } else if (pricing[subscription.subscriptionType] > 0) {
+            try {
+                await createRazorpaySubscriptionForPlan(subscription, subscription.subscriptionType)
+            } catch (error) {
+                console.log("Error creating Razorpay subscription on resume...", error)
+                return res.status(400).json({
+                    success: false,
+                    message: "Missing Razorpay customer id for paid plan"
+                })
+            }
         }
 
         subscription.status = subscription.previousStatus || "Active"
@@ -483,9 +567,34 @@ exports.adminResumeSubscription = async (req, res) => {
 
         await subscription.save()
 
+        const afterState = {
+            status: subscription.status,
+            pausedAt: subscription.pausedAt,
+            pauseReason: subscription.pauseReason,
+            pausedBy: subscription.pausedBy,
+            subscriptionType: subscription.subscriptionType,
+            razorpaySubscriptionId: subscription.razorpaySubscriptionId,
+            razorpayPlanId: subscription.razorpayPlanId
+        }
+
+        await createAuditLog({
+            actorId: req.user?.id,
+            action: "subscription:resume",
+            targetType: "Subscription",
+            targetId: subscription._id,
+            metadata: {
+                endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+            },
+            changes: { before: beforeState, after: afterState },
+            ip: req.ip || req.connection?.remoteAddress,
+            userAgent: req.get("user-agent"),
+            status: "success"
+        })
+
         return res.status(200).json({
             success: true,
             subscription,
+            auditLogged: true,
             message: "Subscription resumed successfully"
         })
     } catch (error) {
@@ -509,6 +618,16 @@ exports.adminCancelSubscription = async (req, res) => {
                 success: false,
                 message: "Subscription not found"
             })
+        }
+
+        const beforeState = {
+            status: subscription.status,
+            cancellationDate: subscription.cancellationDate,
+            cancelReason: subscription.cancelReason,
+            canceledBy: subscription.canceledBy,
+            subscriptionType: subscription.subscriptionType,
+            razorpaySubscriptionId: subscription.razorpaySubscriptionId,
+            razorpayPlanId: subscription.razorpayPlanId
         }
 
         if (subscription.status === "Canceled") {
@@ -542,9 +661,35 @@ exports.adminCancelSubscription = async (req, res) => {
 
         await subscription.save()
 
+        const afterState = {
+            status: subscription.status,
+            cancellationDate: subscription.cancellationDate,
+            cancelReason: subscription.cancelReason,
+            canceledBy: subscription.canceledBy,
+            subscriptionType: subscription.subscriptionType,
+            razorpaySubscriptionId: subscription.razorpaySubscriptionId,
+            razorpayPlanId: subscription.razorpayPlanId
+        }
+
+        await createAuditLog({
+            actorId: req.user?.id,
+            action: "subscription:cancel",
+            targetType: "Subscription",
+            targetId: subscription._id,
+            metadata: {
+                reason: reason || null,
+                endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+            },
+            changes: { before: beforeState, after: afterState },
+            ip: req.ip || req.connection?.remoteAddress,
+            userAgent: req.get("user-agent"),
+            status: "success"
+        })
+
         return res.status(200).json({
             success: true,
             subscription,
+            auditLogged: true,
             message: "Subscription canceled successfully"
         })
     } catch (error) {
@@ -552,6 +697,174 @@ exports.adminCancelSubscription = async (req, res) => {
         return res.status(500).json({
             success: false,
             message: "Unable to cancel subscription"
+        })
+    }
+}
+
+exports.adminChangePlan = async (req, res) => {
+    try {
+        const { id } = req.params
+        const { plan, reason } = req.body || {}
+
+        if (!plan) {
+            return res.status(400).json({
+                success: false,
+                message: "Plan is required"
+            })
+        }
+
+        if (!pricing[plan]) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid plan"
+            })
+        }
+
+        const subscription = await Subscription.findById(id)
+        if (!subscription) {
+            return res.status(404).json({
+                success: false,
+                message: "Subscription not found"
+            })
+        }
+
+        const beforeState = {
+            status: subscription.status,
+            subscriptionType: subscription.subscriptionType,
+            monthlyPrice: subscription.monthlyPrice,
+            renewalDate: subscription.renewalDate,
+            razorpaySubscriptionId: subscription.razorpaySubscriptionId,
+            razorpayPlanId: subscription.razorpayPlanId
+        }
+
+        if (subscription.status === "Canceled") {
+            return res.status(400).json({
+                success: false,
+                message: "Canceled subscriptions cannot change plan"
+            })
+        }
+
+        if (subscription.status === "Past_due") {
+            return res.status(400).json({
+                success: false,
+                message: "Past-due subscriptions cannot change plan"
+            })
+        }
+
+        if (subscription.subscriptionType === plan) {
+            return res.status(400).json({
+                success: false,
+                message: `Subscription is already on ${plan} plan`
+            })
+        }
+
+        const oldPlan = subscription.subscriptionType
+        const oldPrice = subscription.monthlyPrice
+
+        // Update subscription plan
+        subscription.subscriptionType = plan
+        subscription.monthlyPrice = pricing[plan]
+        subscription.planChangedBy = req.user.id
+        subscription.planChangedAt = new Date()
+        subscription.planChangeReason = reason || undefined
+        subscription.renewalDate = dayjs().add(30, "day").toDate()
+        subscription.pendingDowngrade = undefined
+        subscription.pendingUpgrade = undefined
+
+        // If changing to/from paid plans, handle Razorpay
+        if (pricing[plan] > 0) {
+            if (!subscription.razorpayCustomerId) {
+                return res.status(400).json({
+                    success: false,
+                    message: "Missing Razorpay customer id for paid plan"
+                })
+            }
+
+            if (subscription.razorpaySubscriptionId) {
+                try {
+                    await razorpay.subscriptions.cancel(subscription.razorpaySubscriptionId)
+                } catch (error) {
+                    console.log("Error canceling old Razorpay subscription...", error)
+                }
+            }
+
+            subscription.razorpaySubscriptionId = undefined
+            subscription.razorpayPlanId = undefined
+
+            if (subscription.status === "Active") {
+                try {
+                    await createRazorpaySubscriptionForPlan(subscription, plan)
+                } catch (error) {
+                    console.log("Error creating new Razorpay subscription...", error)
+                    return res.status(502).json({
+                        success: false,
+                        message: "Unable to create Razorpay subscription"
+                    })
+                }
+            }
+        } else if (pricing[plan] === 0) {
+            // Downgrade to free - cancel Razorpay subscription
+            if (subscription.razorpaySubscriptionId) {
+                try {
+                    await razorpay.subscriptions.cancel(subscription.razorpaySubscriptionId)
+                } catch (error) {
+                    console.log("Error canceling Razorpay subscription...", error)
+                }
+            }
+            subscription.razorpaySubscriptionId = undefined
+            subscription.razorpayPlanId = undefined
+        }
+
+        // Add to payment history
+        subscription.paymentHistory.push({
+            date: new Date(),
+            amount: pricing[plan],
+            paymentStatus: "success",
+            event: "admin_plan_change"
+        })
+
+        await subscription.save()
+
+        const afterState = {
+            status: subscription.status,
+            subscriptionType: subscription.subscriptionType,
+            monthlyPrice: subscription.monthlyPrice,
+            renewalDate: subscription.renewalDate,
+            razorpaySubscriptionId: subscription.razorpaySubscriptionId,
+            razorpayPlanId: subscription.razorpayPlanId
+        }
+
+        await createAuditLog({
+            actorId: req.user?.id,
+            action: "subscription:plan-change",
+            targetType: "Subscription",
+            targetId: subscription._id,
+            metadata: {
+                reason: reason || null,
+                newPlan: plan,
+                endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+            },
+            changes: { before: beforeState, after: afterState },
+            ip: req.ip || req.connection?.remoteAddress,
+            userAgent: req.get("user-agent"),
+            status: "success"
+        })
+
+        return res.status(200).json({
+            success: true,
+            subscription,
+            changes: {
+                from: { plan: oldPlan, price: oldPrice },
+                to: { plan, price: pricing[plan] }
+            },
+            auditLogged: true,
+            message: `Plan changed from ${oldPlan} to ${plan} successfully`
+        })
+    } catch (error) {
+        console.log("Error in adminChangePlan...", error)
+        return res.status(500).json({
+            success: false,
+            message: "Unable to change subscription plan"
         })
     }
 }

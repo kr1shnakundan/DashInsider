@@ -31,6 +31,7 @@ app.use(cookieParser())
 const userRoute = require("./routes/UserRoute");
 const metriceRoute = require("./routes/MetriceRoute")
 const subscriptionsRoute = require("./routes/SubscriptionRoute")
+const auditLogRoute = require("./routes/AuditLogRoute")
 const trendRoute = require("./routes/TrendRoute")
 const cohortRoute = require("./routes/CohortRoute")
 const segmentationRoute = require("./routes/SegmentationRoute")
@@ -39,9 +40,12 @@ const paymentRoute = require("./routes/PaymentRoute")
 const inoviceRoute = require("./routes/InvoiceRoute")
 const customerManagementRoute = require("./routes/CustomerManagementRoute")
 
+const { auditLog } = require("./middlewares/auditLogMiddleware")
+
 app.use("/api/v1/auth",userRoute);
 app.use("/api/v1/metrics",metriceRoute)
-app.use("/api/v1/subscriptions",subscriptionsRoute)
+app.use("/api/v1/subscriptions", auditLog, subscriptionsRoute)
+app.use("/api/v1/admin/audit-logs", auditLogRoute)
 app.use("/api/v1/trends",trendRoute)
 app.use("/api/v1/cohort",cohortRoute)
 app.use("/api/v1/segmentation",segmentationRoute)

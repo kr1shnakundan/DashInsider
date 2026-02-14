@@ -5,6 +5,7 @@ const Subscription = require("../models/Subscription");
 const Razorpay = require("razorpay");
 const dayjs = require("dayjs");
 const { default: mongoose } = require("mongoose");
+const { createAuditLog } = require("./AuditLogController");
 
 require("dotenv").config()
 
@@ -31,6 +32,21 @@ const markPastDue = (subscription) => {
 const clearPastDue = (subscription) => {
     subscription.pastDueSince = undefined
     subscription.graceUntil = undefined
+}
+
+const logRetryFailure = async (req, targetId, metadata, changes, errorMessage) => {
+    await createAuditLog({
+        actorId: req.user?.id,
+        action: "payment:retry",
+        targetType: "Payment",
+        targetId,
+        metadata,
+        changes,
+        ip: req.ip || req.connection?.remoteAddress,
+        userAgent: req.get("user-agent"),
+        status: "failure",
+        errorMessage
+    })
 }
 
 const ensureRazorpaySubscription = async (subscription, customerId) => {
@@ -470,8 +486,16 @@ exports.retryPayment = async (req, res) => {
         if (!mongoose.Types.ObjectId.isValid(id)) {
             await session.abortTransaction()
             session.endSession()
+            await logRetryFailure(
+                req,
+                id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+                { before: null, after: null },
+                "Invalid payment method id"
+            )
             return res.status(400).json({
                 success: false,
+                auditLogged: true,
                 message: "Invalid payment method id"
             })
         }
@@ -480,8 +504,16 @@ exports.retryPayment = async (req, res) => {
         if (!method) {
             await session.abortTransaction()
             session.endSession()
+            await logRetryFailure(
+                req,
+                id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+                { before: null, after: null },
+                "Payment method not found"
+            )
             return res.status(404).json({
                 success: false,
+                auditLogged: true,
                 message: "Payment method not found"
             })
         }
@@ -489,8 +521,16 @@ exports.retryPayment = async (req, res) => {
         if (method.status !== "active") {
             await session.abortTransaction()
             session.endSession()
+            await logRetryFailure(
+                req,
+                method._id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+                { before: null, after: null },
+                "Payment method is not active"
+            )
             return res.status(400).json({
                 success: false,
+                auditLogged: true,
                 message: "Payment method is not active"
             })
         }
@@ -499,8 +539,16 @@ exports.retryPayment = async (req, res) => {
         if (!user) {
             await session.abortTransaction()
             session.endSession()
+            await logRetryFailure(
+                req,
+                method._id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+                { before: null, after: null },
+                "User not found for this payment method"
+            )
             return res.status(404).json({
                 success: false,
+                auditLogged: true,
                 message: "User not found for this payment method"
             })
         }
@@ -509,8 +557,16 @@ exports.retryPayment = async (req, res) => {
         if (!subscription) {
             await session.abortTransaction()
             session.endSession()
+            await logRetryFailure(
+                req,
+                method._id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+                { before: null, after: null },
+                "Subscription not found for this user"
+            )
             return res.status(404).json({
                 success: false,
+                auditLogged: true,
                 message: "Subscription not found for this user"
             })
         }
@@ -519,8 +575,16 @@ exports.retryPayment = async (req, res) => {
         if (!lastEntry || lastEntry.paymentStatus !== "failed") {
             await session.abortTransaction()
             session.endSession()
+            await logRetryFailure(
+                req,
+                method._id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+                { before: null, after: null },
+                "No failed payment available to retry"
+            )
             return res.status(400).json({
                 success: false,
+                auditLogged: true,
                 message: "No failed payment available to retry"
             })
         }
@@ -538,10 +602,25 @@ exports.retryPayment = async (req, res) => {
         if (!expectedAmount || expectedAmount <= 0) {
             await session.abortTransaction()
             session.endSession()
+            await logRetryFailure(
+                req,
+                method._id,
+                { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+                { before: null, after: null },
+                "Invalid amount for retry"
+            )
             return res.status(400).json({
                 success: false,
+                auditLogged: true,
                 message: "Invalid amount for retry"
             })
+        }
+
+        const beforeState = {
+            subscriptionId: subscription._id,
+            paymentHistoryCount: subscription.paymentHistory.length,
+            lastPaymentStatus: lastEntry.paymentStatus,
+            lastPaymentOrderId: lastEntry.razorpayOrderId
         }
 
         const order = await razorpay.orders.create({
@@ -569,17 +648,50 @@ exports.retryPayment = async (req, res) => {
         await session.commitTransaction()
         session.endSession()
 
+        const afterState = {
+            subscriptionId: subscription._id,
+            paymentHistoryCount: subscription.paymentHistory.length,
+            newOrderId: order.id,
+            retryFor: isUpgradeRetry ? "upgrade" : "renewal"
+        }
+
+        await createAuditLog({
+            actorId: req.user?.id,
+            action: "payment:retry",
+            targetType: "Payment",
+            targetId: method._id,
+            metadata: {
+                subscriptionId: subscription._id,
+                userId: user._id,
+                orderId: order.id,
+                endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+            },
+            changes: { before: beforeState, after: afterState },
+            ip: req.ip || req.connection?.remoteAddress,
+            userAgent: req.get("user-agent"),
+            status: "success"
+        })
+
         return res.status(200).json({
             success: true,
             order,
+            auditLogged: true,
             message: "Retry order created"
         })
     } catch (error) {
         await session.abortTransaction()
         session.endSession()
         console.error("Error in retryPayment controller...", error)
+        await logRetryFailure(
+            req,
+            req.params?.id,
+            { endpoint: `${req.method} ${req.baseUrl}${req.route?.path}` },
+            { before: null, after: null },
+            "Unable to retry payment"
+        )
         return res.status(500).json({
             success: false,
+            auditLogged: true,
             message: "Unable to retry payment"
         })
     }

@@ -3,6 +3,22 @@ const Subscription = require("../models/Subscription");
 const Profile = require("../models/Profile");
 const CustomerNote = require("../models/CustomerNote");
 const mongoose = require("mongoose");
+const { createAuditLog } = require("./AuditLogController");
+
+const logAdminFailure = async (req, action, targetType, targetId, metadata, changes, errorMessage) => {
+  await createAuditLog({
+    actorId: req.user?.id,
+    action,
+    targetType,
+    targetId,
+    metadata,
+    changes,
+    ip: req.ip || req.connection?.remoteAddress,
+    userAgent: req.get("user-agent"),
+    status: "failure",
+    errorMessage
+  });
+};
 
 /**
  * GET /admin/customers
@@ -127,8 +143,20 @@ exports.getCustomerDetail = async (req, res) => {
     const { customerId } = req.params;
 
     if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      await logAdminFailure(
+        req,
+        "user:update",
+        "User",
+        customerId,
+        {
+          endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`,
+        },
+        { before: null, after: null },
+        "Invalid customer ID"
+      );
       return res.status(400).json({
         success: false,
+        auditLogged: true,
         message: "Invalid customer ID",
       });
     }
@@ -182,6 +210,12 @@ exports.updateCustomer = async (req, res) => {
   try {
     const { customerId } = req.params;
     const { firstName, lastName, contactNumber, profession } = req.body;
+    const updates = {
+      ...(firstName ? { firstName } : {}),
+      ...(lastName ? { lastName } : {}),
+      ...(contactNumber ? { contactNumber } : {}),
+      ...(profession ? { profession } : {}),
+    };
 
     if (!mongoose.Types.ObjectId.isValid(customerId)) {
       return res.status(400).json({
@@ -190,13 +224,44 @@ exports.updateCustomer = async (req, res) => {
       });
     }
 
-    const user = await User.findById(customerId);
+    const user = await User.findById(customerId).populate('additionalDetails');
     if (!user) {
+      await logAdminFailure(
+        req,
+        "user:update",
+        "User",
+        customerId,
+        {
+          endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`,
+          updates
+        },
+        { before: null, after: null },
+        "Customer not found"
+      );
       return res.status(404).json({
         success: false,
+        auditLogged: true,
         message: "Customer not found",
       });
     }
+
+    const profileId = user.additionalDetails?._id || user.additionalDetails;
+    const profileBefore = profileId
+      ? await Profile.findById(profileId).lean()
+      : null;
+    const beforeState = {
+      user: {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+      },
+      profile: profileBefore
+        ? {
+            contactNumber: profileBefore.contactNumber,
+            profession: profileBefore.profession,
+          }
+        : null,
+    };
 
     // Update user fields
     if (firstName) user.firstName = firstName;
@@ -207,11 +272,45 @@ exports.updateCustomer = async (req, res) => {
     let profile = null;
     if (contactNumber || profession) {
         profile = await Profile.findByIdAndUpdate(
-        user.additionalDetails,
+        profileId,
         { contactNumber, profession },
         { new: true, runValidators: true }
       );
     }
+
+    const profileAfter = profile
+      ? profile.toObject()
+      : profileId
+        ? await Profile.findById(profileId).lean()
+        : null;
+    const afterState = {
+      user: {
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+      },
+      profile: profileAfter
+        ? {
+            contactNumber: profileAfter.contactNumber,
+            profession: profileAfter.profession,
+          }
+        : null,
+    };
+
+    await createAuditLog({
+      actorId: req.user?.id,
+      action: "user:update",
+      targetType: "User",
+      targetId: user._id,
+      metadata: {
+        endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`,
+        updates,
+      },
+      changes: { before: beforeState, after: afterState },
+      ip: req.ip || req.connection?.remoteAddress,
+      userAgent: req.get("user-agent"),
+      status: "success",
+    });
 
     return res.status(200).json({
       success: true,
@@ -219,12 +318,25 @@ exports.updateCustomer = async (req, res) => {
         user:user,
         profile:profile
       },
+      auditLogged: true,
       message: "Customer updated successfully",
     });
   } catch (error) {
     console.log("error in updateCustomer..: ", error);
+    await logAdminFailure(
+      req,
+      "user:update",
+      "User",
+      req.params?.customerId,
+      {
+        endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`,
+      },
+      { before: null, after: null },
+      "Unable to update customer"
+    );
     return res.status(500).json({
       success: false,
+      auditLogged: true,
       message: "Unable to update customer",
     });
   }
@@ -238,30 +350,78 @@ exports.addCustomerNote = async (req, res) => {
     const authorId = req.user?.id;
 
     if (!authorId) {
+      await logAdminFailure(
+        req,
+        "customer:note-add",
+        "User",
+        customerId,
+        {
+          endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+        },
+        { before: null, after: null },
+        "Unauthorized"
+      );
       return res.status(401).json({
         success: false,
+        auditLogged: true,
         message: "Unauthorized",
       });
     }
 
     if (!mongoose.Types.ObjectId.isValid(customerId)) {
+      await logAdminFailure(
+        req,
+        "customer:note-add",
+        "User",
+        customerId,
+        {
+          endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+        },
+        { before: null, after: null },
+        "Invalid customer ID"
+      );
       return res.status(400).json({
         success: false,
+        auditLogged: true,
         message: "Invalid customer ID",
       });
     }
 
     if (!body || !body.trim()) {
+      await logAdminFailure(
+        req,
+        "customer:note-add",
+        "User",
+        customerId,
+        {
+          endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+        },
+        { before: null, after: null },
+        "Note body is required"
+      );
       return res.status(400).json({
         success: false,
+        auditLogged: true,
         message: "Note body is required",
       });
     }
 
     const customer = await User.findById(customerId).select("_id");
     if (!customer) {
+      await logAdminFailure(
+        req,
+        "customer:note-add",
+        "User",
+        customerId,
+        {
+          endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+        },
+        { before: null, after: null },
+        "Customer not found"
+      );
       return res.status(404).json({
         success: false,
+        auditLogged: true,
         message: "Customer not found",
       });
     }
@@ -272,15 +432,43 @@ exports.addCustomerNote = async (req, res) => {
       body: body.trim(),
     });
 
+    await createAuditLog({
+      actorId: req.user?.id,
+      action: "customer:note-add",
+      targetType: "User",
+      targetId: customerId,
+      metadata: {
+        noteId: customerNote._id,
+        endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`,
+      },
+      changes: { before: null, after: { body: customerNote.body } },
+      ip: req.ip || req.connection?.remoteAddress,
+      userAgent: req.get("user-agent"),
+      status: "success",
+    });
+
     return res.status(201).json({
       success: true,
       data: customerNote,
+      auditLogged: true,
       message: "Customer note created successfully",
     });
   } catch (error) {
     console.log("error in addCustomerNote..: ", error);
+    await logAdminFailure(
+      req,
+      "customer:note-add",
+      "User",
+      req.params?.customerId,
+      {
+        endpoint: `${req.method} ${req.baseUrl}${req.route?.path}`
+      },
+      { before: null, after: null },
+      "Unable to add customer note"
+    );
     return res.status(500).json({
       success: false,
+      auditLogged: true,
       message: "Unable to add customer note",
     });
   }
