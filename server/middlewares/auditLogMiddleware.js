@@ -11,7 +11,11 @@ const actionMap = {
     "PUT:/api/v1/customers/:customerId/update": "user:update",
     "POST:/api/v1/customers/:customerId/addnote": "customer:note-add",
     "POST:/api/v1/payment/admin/payment-methods/:id/retry": "payment:retry",
-    "POST:/api/v1/invoices/:id/resend": "invoice:resend"
+    "POST:/api/v1/invoices/:id/resend": "invoice:resend",
+    "POST:/api/v1/notifications/admin/notifications/send": "notification:bulk-send",
+    "POST:/api/v1/notifications/admin/customers/:id/notify": "notification:send",
+    "POST:/api/v1/notifications/admin/notifications/templates": "notification:template-create",
+    "PATCH:/api/v1/notifications/admin/notifications/templates/:id/deactivate": "notification:template-deactivate"
 }
 
 const getActionFromRoute = (method, path) => {

@@ -21,13 +21,17 @@ const auditLogSchema = new mongoose.Schema({
             "customer:note-add",
             "user:delete",
             "payment:retry",
-            "invoice:resend"
+            "invoice:resend",
+            "notification:send",
+            "notification:bulk-send",
+            "notification:template-create",
+            "notification:template-deactivate"
         ]
     },
     targetType: {
         type: String,
         required: true,
-        enum: ["Subscription", "User", "Payment", "Invoice"],
+        enum: ["Subscription", "User", "Payment", "Invoice", "NotificationTemplate"],
         default: "Subscription"
     },
     targetId: {

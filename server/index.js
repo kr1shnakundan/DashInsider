@@ -39,6 +39,7 @@ const forecastingRoute = require("./routes/forecastingRoute")
 const paymentRoute = require("./routes/PaymentRoute")
 const inoviceRoute = require("./routes/InvoiceRoute")
 const customerManagementRoute = require("./routes/CustomerManagementRoute")
+const notificationRoute = require("./routes/NotificationRoute")
 
 const { auditLog } = require("./middlewares/auditLogMiddleware")
 
@@ -53,6 +54,7 @@ app.use("/api/v1/forecasting",forecastingRoute)
 app.use("/api/v1/payment",paymentRoute)
 app.use("/api/v1/invoices", inoviceRoute)
 app.use("/api/v1/customers", customerManagementRoute)
+app.use("/api/v1/notifications", auditLog, notificationRoute)
 
 app.get("/",(req,res)=>{
     return res.json({
