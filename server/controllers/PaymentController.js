@@ -2,6 +2,7 @@ const crypto = require("crypto")
 const PaymentMethod = require("../models/PaymentMethod");
 const User = require("../models/User");
 const Subscription = require("../models/Subscription");
+const PricingPlan = require("../models/PricingPlan");
 const Razorpay = require("razorpay");
 const dayjs = require("dayjs");
 const { default: mongoose } = require("mongoose");
@@ -17,10 +18,27 @@ const razorpay = new Razorpay({
 
 const GRACE_DAYS = 3
 
-const razorpayPlanIds = {
-    Pro: process.env.RAZORPAY_PLAN_PRO,
-    Premium: process.env.RAZORPAY_PLAN_PREMIUM
-}
+// Fetch Razorpay plan IDs from database
+const getRazorpayPlanIdsFromDB = async () => {
+    try {
+        const pricingPlans = await PricingPlan.find({ isActive: true })
+            .select("planType razorpayPlanId")
+            .lean();
+        
+        const planIdsMap = {};
+
+        pricingPlans.forEach(plan => {
+            if (plan.razorpayPlanId) {
+                planIdsMap[plan.planType] = plan.razorpayPlanId;
+            }
+        });
+
+        return planIdsMap;
+    } catch (error) {
+        console.error("Error fetching Razorpay plan IDs from DB:", error);
+        return {};
+    }
+};
 
 const markPastDue = (subscription) => {
     const now = dayjs()
@@ -50,7 +68,9 @@ const logRetryFailure = async (req, targetId, metadata, changes, errorMessage) =
 }
 
 const ensureRazorpaySubscription = async (subscription, customerId) => {
-    const planId = razorpayPlanIds[subscription.subscriptionType]
+    // Fetch latest Razorpay plan IDs from database
+    const planIds = await getRazorpayPlanIdsFromDB();
+    const planId = planIds[subscription.subscriptionType]
     const effectiveCustomerId = customerId || subscription.razorpayCustomerId
 
     //if plan is free

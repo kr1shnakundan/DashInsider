@@ -8,7 +8,7 @@ const {
   deactivateNotificationTemplate,
   getNotificationTemplates 
 } = require("../controllers/NotificationController");
-const auth = require("../middlewares/authMiddleware");
+const { auth } = require("../middlewares/authMiddleware");
 
 // ============ POST /admin/notifications/templates ============
 // Create a new notification template

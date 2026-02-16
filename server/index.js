@@ -40,6 +40,7 @@ const paymentRoute = require("./routes/PaymentRoute")
 const inoviceRoute = require("./routes/InvoiceRoute")
 const customerManagementRoute = require("./routes/CustomerManagementRoute")
 const notificationRoute = require("./routes/NotificationRoute")
+const planPricingRoute = require("./routes/PlanPricingRoute")
 
 const { auditLog } = require("./middlewares/auditLogMiddleware")
 
@@ -47,6 +48,7 @@ app.use("/api/v1/auth",userRoute);
 app.use("/api/v1/metrics",metriceRoute)
 app.use("/api/v1/subscriptions", auditLog, subscriptionsRoute)
 app.use("/api/v1/admin/audit-logs", auditLogRoute)
+app.use("/api/v1/price", auditLog, planPricingRoute)
 app.use("/api/v1/trends",trendRoute)
 app.use("/api/v1/cohort",cohortRoute)
 app.use("/api/v1/segmentation",segmentationRoute)

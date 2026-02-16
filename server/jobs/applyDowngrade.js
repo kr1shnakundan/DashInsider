@@ -11,13 +11,33 @@ const razorpay = new Razorpay({
     key_secret: process.env.RAZORPAY_SECRET
 })
 
-const razorpayPlanIds = {
-    Pro: process.env.RAZORPAY_PLAN_PRO,
-    Premium: process.env.RAZORPAY_PLAN_PREMIUM
-}
+const PricingPlan = require("../models/PricingPlan")
+
+// Fetch Razorpay plan IDs from database
+const getRazorpayPlanIdsFromDB = async () => {
+    try {
+        const pricingPlans = await PricingPlan.find({ isActive: true })
+            .select("planType razorpayPlanId")
+            .lean();
+        
+        const planIdsMap = {};
+
+        pricingPlans.forEach(plan => {
+            if (plan.razorpayPlanId) {
+                planIdsMap[plan.planType] = plan.razorpayPlanId;
+            }
+        });
+
+        return planIdsMap;
+    } catch (error) {
+        console.error("Error fetching Razorpay plan IDs from DB:", error);
+        return {};
+    }
+};
 
 const syncRazorpaySubscription = async (subscription, planType) => {
-    const planId = razorpayPlanIds[planType]
+    const planIds = await getRazorpayPlanIdsFromDB();
+    const planId = planIds[planType]
     if (!planId) {
         if (subscription.razorpaySubscriptionId) {
             try {

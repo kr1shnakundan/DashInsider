@@ -1,6 +1,7 @@
 const dayjs = require("dayjs")
 const Subscription = require("../models/Subscription")
 const User = require("../models/User")
+const PricingPlan = require("../models/PricingPlan")
 const mongoose = require("mongoose")
 const Razorpay = require("razorpay")
 const { createAuditLog } = require("./AuditLogController")
@@ -12,21 +13,73 @@ const razorpay = new Razorpay({
     key_secret: process.env.RAZORPAY_SECRET,
 });
 
+// Legacy fallback pricing (should be overridden by database on app startup)
 const pricing = {
     Free: 0,
     Pro: 499,
     Premium: 999
 }
 
+// Fetch current pricing from database
+const getPricingFromDB = async () => {
+    try {
+        const pricingPlans = await PricingPlan.find({ isActive: true })
+            .select("planType monthlyPrice")
+            .lean();
+        
+        const pricingMap = {};
+        pricingPlans.forEach(plan => {
+            pricingMap[plan.planType] = plan.monthlyPrice;
+        });
+
+        // Ensure all plan types exist
+        ["Free", "Pro", "Premium"].forEach(planType => {
+            if (!pricingMap[planType]) {
+                pricingMap[planType] = pricing[planType]; // Fallback to defaults
+            }
+        });
+
+        return pricingMap;
+    } catch (error) {
+        console.error("Error fetching pricing from DB, using defaults:", error);
+        return pricing; // Fallback to hardcoded if DB fails
+    }
+};
+
+// Get current pricing (cached or fetched)
+const getPricing = async () => {
+    return await getPricingFromDB();
+};
+
+// Fetch Razorpay plan IDs from database
+const getRazorpayPlanIdsFromDB = async () => {
+    try {
+        const pricingPlans = await PricingPlan.find({ isActive: true })
+            .select("planType razorpayPlanId")
+            .lean();
+        
+        const planIdsMap = {};
+
+        pricingPlans.forEach(plan => {
+            if (plan.razorpayPlanId) {
+                planIdsMap[plan.planType] = plan.razorpayPlanId;
+            }
+        });
+
+        return planIdsMap;
+    } catch (error) {
+        console.error("Error fetching Razorpay plan IDs from DB:", error);
+        return {};
+    }
+};
+
 const planHierarchy = { Free: 0, Pro: 1, Premium: 2 };
 
-const razorpayPlanIds = {
-    Pro: process.env.RAZORPAY_PLAN_PRO,
-    Premium: process.env.RAZORPAY_PLAN_PREMIUM
-}
-
 const createRazorpaySubscriptionForPlan = async (subscription, planType) => {
-    const planId = razorpayPlanIds[planType]
+    // Fetch latest plan IDs from database
+    const planIds = await getRazorpayPlanIdsFromDB();
+    const planId = planIds[planType];
+    
     if (!planId) {
         return null
     }
@@ -134,7 +187,10 @@ exports.upgradeSubscriptions = async(req,res)=>{
         const {plan} = req.body;
         const userId = req.user.id;
 
-        if(!pricing[plan]){
+        // Fetch dynamic pricing from database
+        const currentPricing = await getPricing();
+
+        if(!currentPricing[plan]){
             await session.abortTransaction()
             session.endSession()
             return res.status(400).json({
@@ -143,7 +199,7 @@ exports.upgradeSubscriptions = async(req,res)=>{
             })
         }
 
-        if (pricing[plan] > 0) {
+        if (currentPricing[plan] > 0) {
             await session.abortTransaction()
             session.endSession()
             return res.status(400).json({
@@ -157,7 +213,7 @@ exports.upgradeSubscriptions = async(req,res)=>{
             const created = await Subscription.create([{
                 userId,
                 subscriptionType: plan,
-                monthlyPrice: pricing[plan],
+                monthlyPrice: currentPricing[plan],
                 status: "Active",
                 startedDate: new Date(),
                 renewalDate: dayjs().add(30, "day").toDate()
@@ -298,7 +354,10 @@ exports.createPayNowOrder = async (req, res) => {
         const { plan } = req.body;
         const userId = req.user.id;
 
-        if (!pricing[plan]) {
+        // Fetch dynamic pricing from database
+        const currentPricing = await getPricing();
+
+        if (!currentPricing[plan]) {
             await session.abortTransaction()
             session.endSession()
             return res.status(400).json({
@@ -307,7 +366,7 @@ exports.createPayNowOrder = async (req, res) => {
             })
         }
 
-        if (pricing[plan] === 0) {
+        if (currentPricing[plan] === 0) {
             await session.abortTransaction()
             session.endSession()
             return res.status(400).json({
@@ -322,7 +381,7 @@ exports.createPayNowOrder = async (req, res) => {
             const created = await Subscription.create([{
                 userId,
                 subscriptionType: "Free",
-                monthlyPrice: pricing.Free,
+                monthlyPrice: currentPricing.Free,
                 status: "Active",
                 startedDate: new Date(),
                 renewalDate: dayjs().add(30, "day").toDate()
@@ -355,7 +414,7 @@ exports.createPayNowOrder = async (req, res) => {
         if (isDowngrade) {
             existing.pendingDowngrade = {
                 planType: plan,
-                monthlyPrice: pricing[plan],
+                monthlyPrice: currentPricing[plan],
                 effectiveDate: existing.renewalDate
             };
 
@@ -381,7 +440,7 @@ exports.createPayNowOrder = async (req, res) => {
         }
 
         const order = await razorpay.orders.create({
-            amount: pricing[plan] * 100,
+            amount: currentPricing[plan] * 100,
             currency: "INR",
             receipt: `upgrade_${existing._id}_${Date.now()}`,
             notes: {
@@ -392,8 +451,8 @@ exports.createPayNowOrder = async (req, res) => {
 
         existing.pendingUpgrade = {
             planType: plan,
-            monthlyPrice: pricing[plan],
-            expectedAmount: pricing[plan],
+            monthlyPrice: currentPricing[plan],
+            expectedAmount: currentPricing[plan],
             razorpayOrderId: order.id,
             requestedAt: new Date()
         }
@@ -562,15 +621,19 @@ exports.adminResumeSubscription = async (req, res) => {
                     message: "Unable to resume Razorpay subscription"
                 })
             }
-        } else if (pricing[subscription.subscriptionType] > 0) {
-            try {
-                await createRazorpaySubscriptionForPlan(subscription, subscription.subscriptionType)
-            } catch (error) {
-                console.log("Error creating Razorpay subscription on resume...", error)
-                return res.status(400).json({
-                    success: false,
-                    message: "Missing Razorpay customer id for paid plan"
-                })
+        } else {
+            // Fetch latest pricing to see if plan is now paid
+            const currentPricing = await getPricing();
+            if (currentPricing[subscription.subscriptionType] > 0) {
+                try {
+                    await createRazorpaySubscriptionForPlan(subscription, subscription.subscriptionType)
+                } catch (error) {
+                    console.log("Error creating Razorpay subscription on resume...", error)
+                    return res.status(400).json({
+                        success: false,
+                        message: "Missing Razorpay customer id for paid plan"
+                    })
+                }
             }
         }
 
@@ -728,7 +791,10 @@ exports.adminChangePlan = async (req, res) => {
             })
         }
 
-        if (!pricing[plan]) {
+        // Fetch dynamic pricing from database
+        const currentPricing = await getPricing();
+
+        if (!currentPricing[plan]) {
             return res.status(400).json({
                 success: false,
                 message: "Invalid plan"
@@ -778,7 +844,7 @@ exports.adminChangePlan = async (req, res) => {
 
         // Update subscription plan
         subscription.subscriptionType = plan
-        subscription.monthlyPrice = pricing[plan]
+        subscription.monthlyPrice = currentPricing[plan]
         subscription.planChangedBy = req.user.id
         subscription.planChangedAt = new Date()
         subscription.planChangeReason = reason || undefined
@@ -787,7 +853,7 @@ exports.adminChangePlan = async (req, res) => {
         subscription.pendingUpgrade = undefined
 
         // If changing to/from paid plans, handle Razorpay
-        if (pricing[plan] > 0) {
+        if (currentPricing[plan] > 0) {
             if (!subscription.razorpayCustomerId) {
                 return res.status(400).json({
                     success: false,
@@ -817,7 +883,7 @@ exports.adminChangePlan = async (req, res) => {
                     })
                 }
             }
-        } else if (pricing[plan] === 0) {
+        } else if (currentPricing[plan] === 0) {
             // Downgrade to free - cancel Razorpay subscription
             if (subscription.razorpaySubscriptionId) {
                 try {
@@ -833,7 +899,7 @@ exports.adminChangePlan = async (req, res) => {
         // Add to payment history
         subscription.paymentHistory.push({
             date: new Date(),
-            amount: pricing[plan],
+            amount: currentPricing[plan],
             paymentStatus: "success",
             event: "admin_plan_change"
         })
@@ -1059,9 +1125,12 @@ exports.adminReactivateSubscription = async(req,res) =>{
             })
         }
 
+        // Fetch current pricing for reactivation
+        const currentPricing = await getPricing();
+
         subscription.subscriptionType = effectivePlan
         subscription.status = "Active"
-        subscription.monthlyPrice = pricing[effectivePlan]
+        subscription.monthlyPrice = currentPricing[effectivePlan]
         subscription.startedDate = new Date()
         subscription.renewalDate = dayjs().add(30, "day").toDate()
         subscription.cancellationDate = undefined
@@ -1083,7 +1152,7 @@ exports.adminReactivateSubscription = async(req,res) =>{
         subscription.razorpaySubscriptionId = undefined
         subscription.razorpayPlanId = undefined
 
-        if (pricing[effectivePlan] > 0) {
+        if (currentPricing[effectivePlan] > 0) {
             if (!subscription.razorpayCustomerId) {
                 await logSubscriptionFailure(
                     req,
